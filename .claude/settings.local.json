@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python parser.py hadis-e-bornito-dua.txt hadis-e-bornito-dua.json -o book-output.json)",
+      "Bash(python -c ':*)"
+    ]
+  }
+}

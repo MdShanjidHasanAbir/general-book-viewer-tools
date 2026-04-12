@@ -21,12 +21,16 @@
       --bar-bg: rgba(0,0,0,0.5);
     }
 
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
+
     body {
       font-family: 'Noto Sans Bengali', sans-serif;
       background: linear-gradient(135deg, #2c2417 0%, #1a1a2e 50%, #2c2417 100%);
-      min-height: 100vh;
+      height: 100vh;
       display: flex;
-      overflow: hidden;
       color: var(--text-color);
     }
 
@@ -34,10 +38,12 @@
     .sidebar {
       width: 0;
       min-width: 0;
+      height: 100vh;
       background: var(--sidebar-bg);
       color: var(--sidebar-text);
       overflow-y: auto;
       overflow-x: hidden;
+      overscroll-behavior: contain;
       transition: width 0.4s ease, min-width 0.4s ease, padding 0.4s ease;
       padding: 0;
       flex-shrink: 0;
@@ -103,6 +109,16 @@
       color: #fff;
     }
 
+    .toc-section.active {
+      background: rgba(201, 168, 76, 0.2);
+      color: var(--cover-accent);
+      font-weight: 600;
+    }
+
+    .toc-chapter-title.active {
+      background: rgba(201, 168, 76, 0.15);
+    }
+
     /* ── Main Area ── */
     .main {
       flex: 1;
@@ -111,6 +127,8 @@
       align-items: center;
       position: relative;
       overflow: hidden;
+      height: 100vh;
+      min-height: 0;
     }
 
     /* ── Top Bar ── */
@@ -172,6 +190,7 @@
     /* ── Page Area ── */
     .page-wrapper {
       flex: 1;
+      min-height: 0;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -183,7 +202,7 @@
 
     .page {
       width: 580px;
-      max-height: calc(100vh - 140px);
+      max-height: 100%;
       background: var(--page-bg);
       padding: 45px 48px 55px;
       overflow-y: auto;
@@ -453,103 +472,6 @@
     let currentPage = 0;
     let isAnimating = false;
 
-    // ── Parse the text file into pages ──
-    function parseBook(text) {
-      const raw = text.split(/<page_number>/i);
-
-      const rawPages = [];
-      for (let i = 1; i < raw.length; i++) {
-        const chunk = raw[i];
-        const closeIdx = chunk.indexOf('</page_number>');
-        if (closeIdx === -1) continue;
-
-        const pageNumRaw = chunk.substring(0, closeIdx).trim();
-        let content = chunk.substring(closeIdx + '</page_number>'.length).trim();
-
-        const numMatch = pageNumRaw.match(/[০-৯\d]+/);
-        const pageLabel = numMatch ? numMatch[0] : pageNumRaw;
-
-        const notes = [];
-        content = content.replace(/<note>([\s\S]*?)<\/note>/gi, (_, n) => {
-          notes.push(n.trim());
-          return '';
-        });
-
-        const hasHeading = /<heading>/i.test(content);
-
-        rawPages.push({ label: pageLabel, fullLabel: pageNumRaw, content, notes, hasHeading });
-      }
-
-      // Section boundaries
-      const sectionStartIndices = [];
-      for (let i = 0; i < rawPages.length; i++) {
-        if (rawPages[i].hasHeading || i === 0) sectionStartIndices.push(i);
-      }
-
-      const sectionLastPage = new Array(rawPages.length);
-      for (let s = 0; s < sectionStartIndices.length; s++) {
-        const start = sectionStartIndices[s];
-        const end = (s + 1 < sectionStartIndices.length)
-          ? sectionStartIndices[s + 1] - 1
-          : rawPages.length - 1;
-        for (let p = start; p <= end; p++) sectionLastPage[p] = end;
-      }
-
-      // Collect notes per section
-      const sectionNotes = {};
-      for (let i = 0; i < rawPages.length; i++) {
-        const lastIdx = sectionLastPage[i];
-        if (!sectionNotes[lastIdx]) sectionNotes[lastIdx] = [];
-        sectionNotes[lastIdx].push(...rawPages[i].notes);
-      }
-
-      // Build final pages
-      const result = [];
-      for (let i = 0; i < rawPages.length; i++) {
-        let html = formatContent(rawPages[i].content);
-
-        const collectedNotes = sectionNotes[i];
-        if (collectedNotes && collectedNotes.length > 0) {
-          html += `<div class="section-footnotes">
-            <div class="section-footnotes-label">তথ্যসূত্র</div>
-            <div class="note">${collectedNotes.join('<br>')}</div>
-          </div>`;
-        }
-
-        result.push({ label: rawPages[i].label, fullLabel: rawPages[i].fullLabel, html });
-      }
-
-      return result;
-    }
-
-    function formatContent(raw) {
-      let html = raw;
-
-      html = html.replace(/<heading>([\s\S]*?)<\/heading>/gi, (_, h) => {
-        return `<div class="heading">${h.trim()}</div>`;
-      });
-
-      const lines = html.split('<br>');
-      const processed = lines.map(line => {
-        const stripped = line.replace(/<[^>]+>/g, '').trim();
-        if (!stripped) return line;
-
-        const arabicChars = (stripped.match(/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g) || []).length;
-        const totalChars = stripped.length;
-
-        if (arabicChars > 0 && arabicChars / totalChars > 0.6) {
-          return `<div class="arabic-text">${line.trim()}</div>`;
-        }
-        return line;
-      });
-
-      html = processed.join('<br>');
-      html = html.replace(/(<br>\s*){3,}/g, '<br><br>');
-      html = html.replace(/^(<br>\s*)+/, '');
-
-      return `<div class="page-text">${html}</div>`;
-    }
-
     // ── Render TOC ──
     function renderTOC() {
       const sidebar = document.getElementById('sidebar');
@@ -584,6 +506,7 @@
       for (let i = 0; i < pages.length; i++) {
         if (pages[i].html.includes(sectionTitle)) {
           goToPage(i);
+          highlightTocItem(sectionTitle);
           if (window.innerWidth < 900) {
             document.getElementById('sidebar').classList.remove('open');
           }
@@ -592,7 +515,65 @@
       }
     }
 
+    function highlightTocItem(sectionTitle) {
+      const sidebar = document.getElementById('sidebar');
+
+      // Clear previous active states
+      sidebar.querySelectorAll('.toc-section.active').forEach(el => el.classList.remove('active'));
+      sidebar.querySelectorAll('.toc-chapter-title.active').forEach(el => el.classList.remove('active'));
+
+      // Find and highlight the matching section
+      const allSections = sidebar.querySelectorAll('.toc-section');
+      for (const sec of allSections) {
+        if (sec.textContent.trim() === sectionTitle) {
+          sec.classList.add('active');
+
+          // Expand and highlight parent chapter
+          const chapter = sec.closest('.toc-chapter');
+          if (chapter) {
+            const sectionsDiv = chapter.querySelector('.toc-sections');
+            if (sectionsDiv && !sectionsDiv.classList.contains('expanded')) {
+              sectionsDiv.classList.add('expanded');
+            }
+            const chapterTitle = chapter.querySelector('.toc-chapter-title');
+            if (chapterTitle) chapterTitle.classList.add('active');
+          }
+
+          // Scroll only inside sidebar (avoid moving the main viewport)
+          const targetTop = sec.offsetTop - ((sidebar.clientHeight - sec.offsetHeight) / 2);
+          sidebar.scrollTo({
+            top: Math.max(0, targetTop),
+            behavior: 'smooth'
+          });
+          break;
+        }
+      }
+    }
+
     // ── Rendering ──
+    function fixMergedArabicHeadings(root) {
+      const headings = root.querySelectorAll('.arabic-text > .heading');
+
+      headings.forEach(heading => {
+        const arabicBox = heading.parentElement;
+        if (!arabicBox || !arabicBox.parentElement) return;
+
+        arabicBox.parentElement.insertBefore(heading, arabicBox);
+
+        while (
+          arabicBox.firstChild &&
+          arabicBox.firstChild.nodeType === Node.TEXT_NODE &&
+          !arabicBox.firstChild.textContent.trim()
+        ) {
+          arabicBox.removeChild(arabicBox.firstChild);
+        }
+
+        if (!arabicBox.textContent.trim()) {
+          arabicBox.remove();
+        }
+      });
+    }
+
     function renderPage(idx) {
       const pageEl = document.getElementById('page');
       const contentEl = document.getElementById('pageContent');
@@ -600,6 +581,7 @@
       const indicator = document.getElementById('pageIndicator');
 
       contentEl.innerHTML = pages[idx].html;
+      fixMergedArabicHeadings(contentEl);
       numEl.textContent = pages[idx].label;
       pageEl.scrollTop = 0;
 
@@ -678,12 +660,16 @@
       const val = document.getElementById('pageInput').value.trim();
       if (!val) return;
       const num = val.replace(/[০-৯]/g, d => '০১২৩৪৫৬৭৮৯'.indexOf(d));
+      // Search through originalLabels to find which section contains this page
       for (let i = 0; i < pages.length; i++) {
-        const pageNum = pages[i].label.replace(/[০-৯]/g, d => '০১২৩৪৫৬৭৮৯'.indexOf(d));
-        if (pageNum === num || pages[i].label === val) {
-          goToPage(i);
-          document.getElementById('pageInput').value = '';
-          return;
+        const labels = pages[i].originalLabels || [pages[i].label];
+        for (const lbl of labels) {
+          const lblNum = lbl.replace(/[০-৯]/g, d => '০১২৩৪৫৬৭৮৯'.indexOf(d));
+          if (lblNum === num || lbl === val) {
+            goToPage(i);
+            document.getElementById('pageInput').value = '';
+            return;
+          }
         }
       }
       const idx = parseInt(num) - 1;
@@ -730,16 +716,11 @@
     // ── Load Data ──
     async function init() {
       try {
-        const [textRes, jsonRes] = await Promise.all([
-          fetch('hadis-e-bornito-dua.txt'),
-          fetch('hadis-e-bornito-dua.json')
-        ]);
+        const res = await fetch('book-output.json');
+        const bookData = await res.json();
 
-        const textData = await textRes.text();
-        const jsonData = await jsonRes.json();
-
-        pages = parseBook(textData);
-        tocData = jsonData;
+        pages = bookData.pages;
+        tocData = bookData.toc;
 
         renderTOC();
         currentPage = -1; // force first render
