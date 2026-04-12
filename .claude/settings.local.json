@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(python parser.py hadis-e-bornito-dua.txt hadis-e-bornito-dua.json -o book-output.json)",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(mkdir -p books/hadis-e-bornito-dua)",
+      "Bash(mkdir -p output)",
+      "Bash(mv hadis-e-bornito-dua.txt books/hadis-e-bornito-dua/)",
+      "Bash(mv hadis-e-bornito-dua.json books/hadis-e-bornito-dua/)"
     ]
   }
 }

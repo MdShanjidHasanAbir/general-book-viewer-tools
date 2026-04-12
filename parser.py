@@ -1,11 +1,24 @@
 """
 Book Parser Script
 ==================
-Parses a book .txt file and .json (table of contents) file,
-produces a single output JSON that the HTML viewer can load directly.
+Parses book .txt and .json (table of contents) files,
+produces output JSON that the HTML viewer can load.
+
+Folder structure:
+    books/
+        <book-name>/
+            *.txt       - book text file
+            *.json      - table of contents file
+    output/
+        <book-name>/
+            book-output.json
+            book-output.xlsx
 
 Usage:
-    python parser.py <book.txt> <toc.json> [-o output.json]
+    python parser.py                       # parse all books in books/
+    python parser.py --all                 # same as above
+    python parser.py <book-name>           # parse a single book by folder name
+    python parser.py <book.txt> <toc.json> # legacy: parse specific files
 
 The .txt file uses these tags:
     <page_number>...</page_number>  - page boundaries and labels
@@ -15,19 +28,6 @@ The .txt file uses these tags:
 
 The .json file is an array of chapters:
     [{"chapter": "...", "sections": ["...", ...]}, ...]
-
-Output JSON structure:
-    {
-        "toc": [...],           // table of contents (from input JSON)
-        "pages": [              // parsed and formatted pages
-            {
-                "label": "67",
-                "originalLabels": ["67"],
-                "html": "<div class='page-text'>...</div>"
-            },
-            ...
-        ]
-    }
 """
 
 import json
@@ -35,9 +35,14 @@ import os
 import re
 import sys
 import argparse
+import glob
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+
+BOOKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'books')
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
 
 
 def classify_line(line):
@@ -203,40 +208,44 @@ def parse_book(text):
     return result
 
 
-def auto_detect_files(directory):
-    """Auto-detect .txt and .json files in the given directory."""
-    import glob
-
-    txt_files = glob.glob(os.path.join(directory, '*.txt'))
-    json_files = [f for f in glob.glob(os.path.join(directory, '*.json'))
+def detect_files_in_folder(folder_path):
+    """Detect .txt and .json files inside a book folder."""
+    txt_files = glob.glob(os.path.join(folder_path, '*.txt'))
+    json_files = [f for f in glob.glob(os.path.join(folder_path, '*.json'))
                   if not os.path.basename(f).startswith('book-output')]
 
     if not txt_files:
-        print('Error: No .txt file found in the current folder.')
-        sys.exit(1)
+        raise FileNotFoundError(f'No .txt file found in {folder_path}')
     if not json_files:
-        print('Error: No .json file found in the current folder.')
-        sys.exit(1)
+        raise FileNotFoundError(f'No .json file found in {folder_path}')
 
     if len(txt_files) > 1:
-        print('Multiple .txt files found:')
-        for i, f in enumerate(txt_files, 1):
-            print(f'  {i}. {os.path.basename(f)}')
-        choice = input('Select .txt file number: ').strip()
-        txt_file = txt_files[int(choice) - 1]
-    else:
-        txt_file = txt_files[0]
-
+        print(f'  Warning: Multiple .txt files in {folder_path}, using first: {os.path.basename(txt_files[0])}')
     if len(json_files) > 1:
-        print('Multiple .json files found:')
-        for i, f in enumerate(json_files, 1):
-            print(f'  {i}. {os.path.basename(f)}')
-        choice = input('Select .json file number: ').strip()
-        json_file = json_files[int(choice) - 1]
-    else:
-        json_file = json_files[0]
+        print(f'  Warning: Multiple .json files in {folder_path}, using first: {os.path.basename(json_files[0])}')
 
-    return txt_file, json_file
+    return txt_files[0], json_files[0]
+
+
+def discover_books():
+    """Find all book folders inside the books/ directory."""
+    if not os.path.isdir(BOOKS_DIR):
+        print(f'Error: books/ directory not found at {BOOKS_DIR}')
+        print('Create books/<book-name>/ folders with .txt and .json files.')
+        sys.exit(1)
+
+    book_folders = []
+    for entry in sorted(os.listdir(BOOKS_DIR)):
+        full_path = os.path.join(BOOKS_DIR, entry)
+        if os.path.isdir(full_path):
+            book_folders.append((entry, full_path))
+
+    if not book_folders:
+        print('Error: No book folders found in books/')
+        print('Create books/<book-name>/ folders with .txt and .json files.')
+        sys.exit(1)
+
+    return book_folders
 
 
 def generate_xlsx(toc_data, pages, output_path):
@@ -247,7 +256,6 @@ def generate_xlsx(toc_data, pages, output_path):
 
     # Header row
     headers = ['chapter_id', 'chapter_name', 'section_id', 'section_name', 'content', 'notes']
-    header_font = Font(bold=True, size=12)
     header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
     header_font_white = Font(bold=True, size=12, color='FFFFFF')
     thin_border = Border(
@@ -312,25 +320,33 @@ def generate_xlsx(toc_data, pages, output_path):
     return row - 2  # number of data rows
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Parse book .txt and .json files into a single output JSON for the HTML viewer.'
-    )
-    parser.add_argument('txt_file', nargs='?', default=None, help='Path to the book .txt file')
-    parser.add_argument('json_file', nargs='?', default=None, help='Path to the table of contents .json file')
-    parser.add_argument('-o', '--output', default='book-output.json',
-                        help='Output JSON file path (default: book-output.json)')
+def generate_books_index(output_dir):
+    """Generate a books-index.json listing all available parsed books."""
+    books = []
+    for entry in sorted(os.listdir(output_dir)):
+        book_output_dir = os.path.join(output_dir, entry)
+        json_path = os.path.join(book_output_dir, 'book-output.json')
+        if os.path.isdir(book_output_dir) and os.path.isfile(json_path):
+            books.append({
+                'id': entry,
+                'name': entry.replace('-', ' ').title(),
+                'path': f'output/{entry}/book-output.json',
+            })
 
-    args = parser.parse_args()
+    index_path = os.path.join(output_dir, 'books-index.json')
+    with open(index_path, 'w', encoding='utf-8') as f:
+        json.dump(books, f, ensure_ascii=False, indent=2)
 
-    # Auto-detect files if not provided
-    if args.txt_file and args.json_file:
-        txt_file = args.txt_file
-        json_file = args.json_file
-    else:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        txt_file, json_file = auto_detect_files(script_dir)
-        print(f'Auto-detected: {os.path.basename(txt_file)} + {os.path.basename(json_file)}')
+    return books
+
+
+def parse_single_book(book_name, book_folder):
+    """Parse a single book and write output files."""
+    print(f'\n--- Parsing: {book_name} ---')
+
+    txt_file, json_file = detect_files_in_folder(book_folder)
+    print(f'  Text: {os.path.basename(txt_file)}')
+    print(f'  TOC:  {os.path.basename(json_file)}')
 
     # Read input files
     with open(txt_file, 'r', encoding='utf-8') as f:
@@ -342,7 +358,7 @@ def main():
     # Parse the book
     pages = parse_book(text_data)
 
-    # Build JSON output (strip extra fields not needed by the viewer)
+    # Build JSON output
     json_pages = []
     for pg in pages:
         json_pages.append({
@@ -356,18 +372,107 @@ def main():
         'pages': json_pages,
     }
 
+    # Create output directory
+    book_output_dir = os.path.join(OUTPUT_DIR, book_name)
+    os.makedirs(book_output_dir, exist_ok=True)
+
     # Write JSON output
-    with open(args.output, 'w', encoding='utf-8') as f:
+    json_output_path = os.path.join(book_output_dir, 'book-output.json')
+    with open(json_output_path, 'w', encoding='utf-8') as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
-    print(f'Parsed {len(pages)} pages from "{os.path.basename(txt_file)}"')
-    print(f'TOC: {len(toc_data)} chapters from "{os.path.basename(json_file)}"')
-    print(f'Output written to "{args.output}"')
+    print(f'  Parsed {len(pages)} pages')
+    print(f'  TOC: {len(toc_data)} chapters')
+    print(f'  JSON -> output/{book_name}/book-output.json')
 
     # Generate xlsx file
-    xlsx_path = os.path.splitext(args.output)[0] + '.xlsx'
+    xlsx_path = os.path.join(book_output_dir, 'book-output.xlsx')
     xlsx_rows = generate_xlsx(toc_data, pages, xlsx_path)
-    print(f'XLSX written to "{xlsx_path}" ({xlsx_rows} rows)')
+    print(f'  XLSX -> output/{book_name}/book-output.xlsx ({xlsx_rows} rows)')
+
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Parse book .txt and .json files into output JSON for the HTML viewer.',
+        epilog='''
+Examples:
+  python parser.py                    Parse all books in books/
+  python parser.py --all              Same as above
+  python parser.py hadis-e-bornito    Parse a single book by folder name
+  python parser.py book.txt toc.json  Legacy mode: parse specific files
+        ''',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument('args', nargs='*', help='Book name, or legacy .txt and .json file paths')
+    parser.add_argument('--all', action='store_true', help='Parse all books in books/ directory')
+    parser.add_argument('-o', '--output', default=None,
+                        help='Output JSON file path (legacy mode only)')
+
+    parsed = parser.parse_args()
+
+    # Legacy mode: two file arguments provided (both existing files)
+    if len(parsed.args) == 2 and os.path.isfile(parsed.args[0]) and os.path.isfile(parsed.args[1]):
+        txt_file, json_file = parsed.args
+        output_path = parsed.output or 'book-output.json'
+
+        with open(txt_file, 'r', encoding='utf-8') as f:
+            text_data = f.read()
+        with open(json_file, 'r', encoding='utf-8') as f:
+            toc_data = json.load(f)
+
+        pages = parse_book(text_data)
+
+        json_pages = [{'label': pg['label'], 'originalLabels': pg['originalLabels'], 'html': pg['html']} for pg in pages]
+        output = {'toc': toc_data, 'pages': json_pages}
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(output, f, ensure_ascii=False, indent=2)
+
+        print(f'Parsed {len(pages)} pages -> {output_path}')
+
+        xlsx_path = os.path.splitext(output_path)[0] + '.xlsx'
+        xlsx_rows = generate_xlsx(toc_data, pages, xlsx_path)
+        print(f'XLSX -> {xlsx_path} ({xlsx_rows} rows)')
+        return
+
+    # Single book by name
+    if len(parsed.args) == 1 and not parsed.all:
+        book_name = parsed.args[0]
+        book_folder = os.path.join(BOOKS_DIR, book_name)
+        if not os.path.isdir(book_folder):
+            print(f'Error: Book folder not found: books/{book_name}/')
+            print(f'Available books:')
+            for name, _ in discover_books():
+                print(f'  - {name}')
+            sys.exit(1)
+
+        parse_single_book(book_name, book_folder)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        books = generate_books_index(OUTPUT_DIR)
+        print(f'\nBooks index updated: {len(books)} book(s)')
+        return
+
+    # Default: parse all books
+    book_folders = discover_books()
+    print(f'Found {len(book_folders)} book(s) in books/')
+
+    success_count = 0
+    for book_name, book_folder in book_folders:
+        try:
+            parse_single_book(book_name, book_folder)
+            success_count += 1
+        except FileNotFoundError as e:
+            print(f'  Skipping {book_name}: {e}')
+        except Exception as e:
+            print(f'  Error parsing {book_name}: {e}')
+
+    # Generate books index
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    books = generate_books_index(OUTPUT_DIR)
+    print(f'\n=== Done: {success_count}/{len(book_folders)} books parsed ===')
+    print(f'Books index: output/books-index.json ({len(books)} book(s))')
 
 
 if __name__ == '__main__':

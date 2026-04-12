@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>হাদীসে বর্ণিত দু'আ - Book Viewer</title>
+  <title>Book Viewer</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Amiri:wght@400;700&display=swap');
 
@@ -164,6 +164,19 @@
     .btn:hover { background: rgba(255,255,255,0.2); }
     .btn:disabled { opacity: 0.3; cursor: default; }
     .btn svg { width: 18px; height: 18px; }
+
+    .book-select {
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.1);
+      color: #e8dcc8;
+      font-size: 0.85rem;
+      font-family: inherit;
+      cursor: pointer;
+      max-width: 220px;
+    }
+    .book-select option { background: #1e3a2a; color: #e8dcc8; }
 
     .topbar-right { display: flex; align-items: center; gap: 10px; }
 
@@ -436,6 +449,11 @@
           সূচিপত্র
         </button>
       </div>
+      <div class="topbar-center" style="display:flex;align-items:center;gap:10px;">
+        <select class="book-select" id="bookSelect">
+          <option value="">Loading books...</option>
+        </select>
+      </div>
       <div class="topbar-right">
         <div class="page-jump">
           <input type="number" id="pageInput" placeholder="পৃষ্ঠা" min="1">
@@ -471,6 +489,7 @@
     let tocData = [];
     let currentPage = 0;
     let isAnimating = false;
+    let booksIndex = [];
 
     // ── Render TOC ──
     function renderTOC() {
@@ -713,10 +732,17 @@
       }
     }, { passive: true });
 
-    // ── Load Data ──
-    async function init() {
+    // ── Book Selector ──
+    document.getElementById('bookSelect').addEventListener('change', (e) => {
+      const path = e.target.value;
+      if (path) loadBook(path);
+    });
+
+    async function loadBook(jsonPath) {
+      document.getElementById('loading').classList.remove('hidden');
+
       try {
-        const res = await fetch('book-output.json');
+        const res = await fetch(jsonPath);
         const bookData = await res.json();
 
         pages = bookData.pages;
@@ -725,6 +751,11 @@
         renderTOC();
         currentPage = -1; // force first render
         goToPage(0);
+
+        // Update page title
+        const select = document.getElementById('bookSelect');
+        const selected = select.options[select.selectedIndex];
+        if (selected) document.title = selected.textContent + ' - Book Viewer';
 
         setTimeout(() => {
           document.getElementById('loading').classList.add('hidden');
@@ -742,6 +773,64 @@
             </p>
           </div>
         `;
+      }
+    }
+
+    // ── Load Data ──
+    async function init() {
+      const select = document.getElementById('bookSelect');
+
+      try {
+        // Try loading the books index
+        const indexRes = await fetch('output/books-index.json');
+        booksIndex = await indexRes.json();
+
+        select.innerHTML = '';
+
+        if (booksIndex.length === 0) {
+          select.innerHTML = '<option value="">No books found</option>';
+          document.getElementById('loading').innerHTML = `
+            <div style="color:#e74c3c; text-align:center;">
+              <p>No books found.</p>
+              <p style="font-size:0.8rem; margin-top:10px; color:#999;">Run <code style="color:var(--cover-accent)">python parser.py</code> to parse books.</p>
+            </div>
+          `;
+          return;
+        }
+
+        booksIndex.forEach((book, i) => {
+          const opt = document.createElement('option');
+          opt.value = book.path;
+          opt.textContent = book.name;
+          select.appendChild(opt);
+        });
+
+        // Load the first book (or from URL hash)
+        const hashBook = window.location.hash.slice(1);
+        const target = booksIndex.find(b => b.id === hashBook) || booksIndex[0];
+        select.value = target.path;
+        await loadBook(target.path);
+
+      } catch (err) {
+        // Fallback: try legacy book-output.json in root
+        try {
+          select.innerHTML = '<option value="book-output.json">Default Book</option>';
+          await loadBook('book-output.json');
+        } catch (fallbackErr) {
+          console.error('Error loading books:', err);
+          document.getElementById('loading').innerHTML = `
+            <div style="color:#e74c3c; text-align:center;">
+              <p>No books found.</p>
+              <p style="font-size:0.8rem; margin-top:10px; color:#999;">
+                Run <code style="color:var(--cover-accent)">python parser.py</code> to parse books first.
+              </p>
+              <p style="font-size:0.75rem; margin-top:15px; color:#888;">
+                Serve via a local server (not file://).<br>
+                Run: <code style="color:var(--cover-accent)">npx serve</code> or <code style="color:var(--cover-accent)">python -m http.server</code>
+              </p>
+            </div>
+          `;
+        }
       }
     }
 
