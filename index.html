@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="bn" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>হাদীসে বর্ণিত দু'আ - Book Viewer</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Amiri:wght@400;700&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --page-bg: #fdf6e3;
+      --text-color: #2c2417;
+      --heading-color: #1a5e3a;
+      --arabic-color: #1a3a5e;
+      --note-bg: #f5edd6;
+      --cover-accent: #c9a84c;
+      --sidebar-bg: #1e3a2a;
+      --sidebar-text: #e8dcc8;
+      --bar-bg: rgba(0,0,0,0.5);
+    }
+
+    body {
+      font-family: 'Noto Sans Bengali', sans-serif;
+      background: linear-gradient(135deg, #2c2417 0%, #1a1a2e 50%, #2c2417 100%);
+      min-height: 100vh;
+      display: flex;
+      overflow: hidden;
+      color: var(--text-color);
+    }
+
+    /* ── Sidebar / Table of Contents ── */
+    .sidebar {
+      width: 0;
+      min-width: 0;
+      background: var(--sidebar-bg);
+      color: var(--sidebar-text);
+      overflow-y: auto;
+      overflow-x: hidden;
+      transition: width 0.4s ease, min-width 0.4s ease, padding 0.4s ease;
+      padding: 0;
+      flex-shrink: 0;
+      border-right: 3px solid var(--cover-accent);
+      scrollbar-width: thin;
+      scrollbar-color: var(--cover-accent) var(--sidebar-bg);
+    }
+
+    .sidebar.open {
+      width: 340px;
+      min-width: 340px;
+      padding: 20px;
+    }
+
+    .sidebar h2 {
+      font-size: 1.2rem;
+      color: var(--cover-accent);
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid rgba(201, 168, 76, 0.3);
+      white-space: nowrap;
+    }
+
+    .toc-chapter { margin-bottom: 15px; }
+
+    .toc-chapter-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--cover-accent);
+      padding: 8px 10px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .toc-chapter-title:hover { background: rgba(255,255,255,0.1); }
+
+    .toc-sections {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+
+    .toc-sections.expanded { max-height: 2000px; }
+
+    .toc-section {
+      font-size: 0.82rem;
+      padding: 5px 10px 5px 25px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.2s, color 0.2s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .toc-section:hover {
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+    }
+
+    /* ── Main Area ── */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* ── Top Bar ── */
+    .topbar {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 24px;
+      background: var(--bar-bg);
+      backdrop-filter: blur(10px);
+      z-index: 100;
+      flex-shrink: 0;
+    }
+
+    .topbar-left { display: flex; align-items: center; gap: 12px; }
+
+    .btn {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #e8dcc8;
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-family: inherit;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn:hover { background: rgba(255,255,255,0.2); }
+    .btn:disabled { opacity: 0.3; cursor: default; }
+    .btn svg { width: 18px; height: 18px; }
+
+    .topbar-right { display: flex; align-items: center; gap: 10px; }
+
+    .page-jump {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .page-jump input {
+      width: 60px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.1);
+      color: #e8dcc8;
+      font-size: 0.85rem;
+      font-family: inherit;
+      text-align: center;
+    }
+
+    .page-jump input::placeholder { color: rgba(232,220,200,0.5); }
+
+    /* ── Page Area ── */
+    .page-wrapper {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      position: relative;
+      overflow: hidden;
+      padding: 20px;
+    }
+
+    .page {
+      width: 580px;
+      max-height: calc(100vh - 140px);
+      background: var(--page-bg);
+      padding: 45px 48px 55px;
+      overflow-y: auto;
+      position: relative;
+      line-height: 1.85;
+      font-size: 0.93rem;
+      border-radius: 10px;
+      box-shadow:
+        0 4px 30px rgba(0,0,0,0.35),
+        0 0 0 1px rgba(0,0,0,0.08);
+      scrollbar-width: thin;
+      scrollbar-color: #c4b99a transparent;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+
+    .page::-webkit-scrollbar { width: 6px; }
+    .page::-webkit-scrollbar-thumb { background: #c4b99a; border-radius: 3px; }
+    .page::-webkit-scrollbar-track { background: transparent; }
+
+    /* Paper texture */
+    .page::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background:
+        repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 28px,
+          rgba(0,0,0,0.01) 28px,
+          rgba(0,0,0,0.01) 29px
+        );
+      pointer-events: none;
+      border-radius: 10px;
+      z-index: 1;
+    }
+
+    .page-number-label {
+      position: absolute;
+      bottom: 20px;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 0.8rem;
+      color: #8a7e6b;
+      font-weight: 500;
+      z-index: 2;
+    }
+
+    /* Slide transitions */
+    .page.slide-out-left {
+      opacity: 0;
+      transform: translateX(-40px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .page.slide-out-right {
+      opacity: 0;
+      transform: translateX(40px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .page.slide-in {
+      opacity: 1;
+      transform: translateX(0);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+
+    /* ── Content Styling ── */
+    .page-content { position: relative; z-index: 2; }
+
+    .page-content .heading {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--heading-color);
+      margin: 16px 0 12px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid rgba(26, 94, 58, 0.2);
+      line-height: 1.5;
+    }
+
+    .page-content .arabic-text {
+      font-family: 'Amiri', 'Noto Naskh Arabic', serif;
+      direction: rtl;
+      text-align: right;
+      font-size: 1.25rem;
+      line-height: 2.2;
+      color: var(--arabic-color);
+      margin: 12px 0;
+      padding: 10px 15px;
+      background: rgba(26, 58, 94, 0.04);
+      border-radius: 6px;
+      border-right: 3px solid rgba(26, 58, 94, 0.2);
+    }
+
+    .page-content .note {
+      font-size: 0.78rem;
+      color: #6b6050;
+      background: var(--note-bg);
+      padding: 10px 14px;
+      border-radius: 6px;
+      margin: 8px 0;
+      border-left: 3px solid var(--cover-accent);
+      line-height: 1.7;
+    }
+
+    .page-content .section-footnotes {
+      margin-top: 24px;
+      padding-top: 14px;
+      border-top: 1px dashed #b8a88a;
+    }
+
+    .page-content .section-footnotes-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #8a7e6b;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+
+    .page-content p {
+      margin-bottom: 8px;
+      text-align: justify;
+    }
+
+    /* ── Bottom Pagination Bar ── */
+    .pagination-bar {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 24px;
+      background: var(--bar-bg);
+      backdrop-filter: blur(10px);
+      flex-shrink: 0;
+    }
+
+    .pagination-bar .page-indicator {
+      color: var(--cover-accent);
+      font-size: 0.88rem;
+      font-weight: 500;
+      min-width: 160px;
+      text-align: center;
+    }
+
+    .pagination-bar .nav-btn {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #e8dcc8;
+      width: 42px;
+      height: 42px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 1.1rem;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .pagination-bar .nav-btn:hover { background: rgba(255,255,255,0.2); }
+    .pagination-bar .nav-btn:disabled { opacity: 0.25; cursor: default; }
+
+    /* ── Loading Screen ── */
+    .loading {
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(135deg, #2c2417, #1a1a2e);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      color: var(--cover-accent);
+      transition: opacity 0.5s;
+    }
+
+    .loading.hidden { opacity: 0; pointer-events: none; }
+
+    .loading-spinner {
+      width: 50px;
+      height: 50px;
+      border: 3px solid rgba(201,168,76,0.2);
+      border-top-color: var(--cover-accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 20px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Responsive ── */
+    @media (max-width: 700px) {
+      .page { width: 100%; font-size: 0.86rem; padding: 30px 24px 50px; border-radius: 0; }
+      .page-wrapper { padding: 10px; }
+      .sidebar.open { width: 280px; min-width: 280px; }
+      .topbar { padding: 8px 12px; }
+      .pagination-bar { padding: 10px 12px; }
+    }
+
+    /* ── Dark mode ── */
+    body.dark-mode {
+      --page-bg: #1e1e1e;
+      --text-color: #d4c9b8;
+      --heading-color: #4eca7a;
+      --arabic-color: #6eb5e0;
+      --note-bg: #2a2a2a;
+    }
+
+    body.dark-mode .page { box-shadow: 0 4px 30px rgba(0,0,0,0.5); }
+  </style>
+</head>
+<body>
+  <!-- Loading -->
+  <div class="loading" id="loading">
+    <div class="loading-spinner"></div>
+    <div>Loading book...</div>
+  </div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <!-- Main Area -->
+  <div class="main">
+    <!-- Top Bar -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="btn" id="tocToggle" title="Table of Contents">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+          সূচিপত্র
+        </button>
+      </div>
+      <div class="topbar-right">
+        <div class="page-jump">
+          <input type="number" id="pageInput" placeholder="পৃষ্ঠা" min="1">
+          <button class="btn" id="goToPage">Go</button>
+        </div>
+        <button class="btn" id="darkToggle" title="Toggle dark mode">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Page -->
+    <div class="page-wrapper">
+      <div class="page" id="page">
+        <div class="page-content" id="pageContent"></div>
+        <div class="page-number-label" id="pageNumLabel"></div>
+      </div>
+    </div>
+
+    <!-- Bottom Pagination -->
+    <div class="pagination-bar">
+      <button class="nav-btn" id="firstBtn" title="First page">&#9664;&#9664;</button>
+      <button class="nav-btn" id="prevBtn" title="Previous">&#9664;</button>
+      <span class="page-indicator" id="pageIndicator"></span>
+      <button class="nav-btn" id="nextBtn" title="Next">&#9654;</button>
+      <button class="nav-btn" id="lastBtn" title="Last page">&#9654;&#9654;</button>
+    </div>
+  </div>
+
+  <script>
+    // ── State ──
+    let pages = [];
+    let tocData = [];
+    let currentPage = 0;
+    let isAnimating = false;
+
+    // ── Parse the text file into pages ──
+    function parseBook(text) {
+      const raw = text.split(/<page_number>/i);
+
+      const rawPages = [];
+      for (let i = 1; i < raw.length; i++) {
+        const chunk = raw[i];
+        const closeIdx = chunk.indexOf('</page_number>');
+        if (closeIdx === -1) continue;
+
+        const pageNumRaw = chunk.substring(0, closeIdx).trim();
+        let content = chunk.substring(closeIdx + '</page_number>'.length).trim();
+
+        const numMatch = pageNumRaw.match(/[০-৯\d]+/);
+        const pageLabel = numMatch ? numMatch[0] : pageNumRaw;
+
+        const notes = [];
+        content = content.replace(/<note>([\s\S]*?)<\/note>/gi, (_, n) => {
+          notes.push(n.trim());
+          return '';
+        });
+
+        const hasHeading = /<heading>/i.test(content);
+
+        rawPages.push({ label: pageLabel, fullLabel: pageNumRaw, content, notes, hasHeading });
+      }
+
+      // Section boundaries
+      const sectionStartIndices = [];
+      for (let i = 0; i < rawPages.length; i++) {
+        if (rawPages[i].hasHeading || i === 0) sectionStartIndices.push(i);
+      }
+
+      const sectionLastPage = new Array(rawPages.length);
+      for (let s = 0; s < sectionStartIndices.length; s++) {
+        const start = sectionStartIndices[s];
+        const end = (s + 1 < sectionStartIndices.length)
+          ? sectionStartIndices[s + 1] - 1
+          : rawPages.length - 1;
+        for (let p = start; p <= end; p++) sectionLastPage[p] = end;
+      }
+
+      // Collect notes per section
+      const sectionNotes = {};
+      for (let i = 0; i < rawPages.length; i++) {
+        const lastIdx = sectionLastPage[i];
+        if (!sectionNotes[lastIdx]) sectionNotes[lastIdx] = [];
+        sectionNotes[lastIdx].push(...rawPages[i].notes);
+      }
+
+      // Build final pages
+      const result = [];
+      for (let i = 0; i < rawPages.length; i++) {
+        let html = formatContent(rawPages[i].content);
+
+        const collectedNotes = sectionNotes[i];
+        if (collectedNotes && collectedNotes.length > 0) {
+          html += `<div class="section-footnotes">
+            <div class="section-footnotes-label">তথ্যসূত্র</div>
+            <div class="note">${collectedNotes.join('<br>')}</div>
+          </div>`;
+        }
+
+        result.push({ label: rawPages[i].label, fullLabel: rawPages[i].fullLabel, html });
+      }
+
+      return result;
+    }
+
+    function formatContent(raw) {
+      let html = raw;
+
+      html = html.replace(/<heading>([\s\S]*?)<\/heading>/gi, (_, h) => {
+        return `<div class="heading">${h.trim()}</div>`;
+      });
+
+      const lines = html.split('<br>');
+      const processed = lines.map(line => {
+        const stripped = line.replace(/<[^>]+>/g, '').trim();
+        if (!stripped) return line;
+
+        const arabicChars = (stripped.match(/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g) || []).length;
+        const totalChars = stripped.length;
+
+        if (arabicChars > 0 && arabicChars / totalChars > 0.6) {
+          return `<div class="arabic-text">${line.trim()}</div>`;
+        }
+        return line;
+      });
+
+      html = processed.join('<br>');
+      html = html.replace(/(<br>\s*){3,}/g, '<br><br>');
+      html = html.replace(/^(<br>\s*)+/, '');
+
+      return `<div class="page-text">${html}</div>`;
+    }
+
+    // ── Render TOC ──
+    function renderTOC() {
+      const sidebar = document.getElementById('sidebar');
+      let tocHTML = `<h2>সূচিপত্র</h2>`;
+
+      tocData.forEach((chapter, ci) => {
+        tocHTML += `<div class="toc-chapter">
+          <div class="toc-chapter-title" onclick="toggleChapter(${ci})" title="${chapter.chapter}">
+            ${chapter.chapter}
+          </div>
+          <div class="toc-sections" id="tocSections${ci}">`;
+
+        chapter.sections.forEach(section => {
+          tocHTML += `<div class="toc-section" onclick="goToSection('${escapeAttr(section)}')" title="${section}">${section}</div>`;
+        });
+
+        tocHTML += `</div></div>`;
+      });
+
+      sidebar.innerHTML = tocHTML;
+    }
+
+    function escapeAttr(str) {
+      return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
+
+    function toggleChapter(idx) {
+      document.getElementById(`tocSections${idx}`).classList.toggle('expanded');
+    }
+
+    function goToSection(sectionTitle) {
+      for (let i = 0; i < pages.length; i++) {
+        if (pages[i].html.includes(sectionTitle)) {
+          goToPage(i);
+          if (window.innerWidth < 900) {
+            document.getElementById('sidebar').classList.remove('open');
+          }
+          return;
+        }
+      }
+    }
+
+    // ── Rendering ──
+    function renderPage(idx) {
+      const pageEl = document.getElementById('page');
+      const contentEl = document.getElementById('pageContent');
+      const numEl = document.getElementById('pageNumLabel');
+      const indicator = document.getElementById('pageIndicator');
+
+      contentEl.innerHTML = pages[idx].html;
+      numEl.textContent = pages[idx].label;
+      pageEl.scrollTop = 0;
+
+      indicator.textContent = `পৃষ্ঠা ${pages[idx].label}  —  ${idx + 1} / ${pages.length}`;
+
+      document.getElementById('prevBtn').disabled = idx === 0;
+      document.getElementById('firstBtn').disabled = idx === 0;
+      document.getElementById('nextBtn').disabled = idx === pages.length - 1;
+      document.getElementById('lastBtn').disabled = idx === pages.length - 1;
+    }
+
+    function goToPage(idx, direction) {
+      idx = Math.max(0, Math.min(idx, pages.length - 1));
+      if (idx === currentPage && pages.length > 0) return;
+
+      const pageEl = document.getElementById('page');
+
+      if (isAnimating) return;
+
+      // If no direction given, infer from index
+      if (direction === undefined) {
+        direction = idx > currentPage ? 'forward' : 'backward';
+      }
+
+      // If first render (no pages loaded yet), just show it
+      if (pages.length === 0 || currentPage === idx) {
+        currentPage = idx;
+        renderPage(currentPage);
+        return;
+      }
+
+      isAnimating = true;
+
+      // Slide out
+      pageEl.classList.add(direction === 'forward' ? 'slide-out-left' : 'slide-out-right');
+
+      setTimeout(() => {
+        currentPage = idx;
+        renderPage(currentPage);
+
+        // Instantly position on opposite side
+        pageEl.classList.remove('slide-out-left', 'slide-out-right', 'slide-in');
+        pageEl.style.transform = direction === 'forward' ? 'translateX(40px)' : 'translateX(-40px)';
+        pageEl.style.opacity = '0';
+
+        // Force reflow
+        void pageEl.offsetWidth;
+
+        // Slide in
+        pageEl.style.transform = '';
+        pageEl.style.opacity = '';
+        pageEl.classList.add('slide-in');
+
+        setTimeout(() => {
+          pageEl.classList.remove('slide-in');
+          isAnimating = false;
+        }, 250);
+      }, 200);
+    }
+
+    // ── Event Listeners ──
+    document.getElementById('nextBtn').addEventListener('click', () => goToPage(currentPage + 1, 'forward'));
+    document.getElementById('prevBtn').addEventListener('click', () => goToPage(currentPage - 1, 'backward'));
+    document.getElementById('firstBtn').addEventListener('click', () => goToPage(0, 'backward'));
+    document.getElementById('lastBtn').addEventListener('click', () => goToPage(pages.length - 1, 'forward'));
+
+    document.getElementById('tocToggle').addEventListener('click', () => {
+      document.getElementById('sidebar').classList.toggle('open');
+    });
+
+    document.getElementById('darkToggle').addEventListener('click', () => {
+      document.body.classList.toggle('dark-mode');
+    });
+
+    document.getElementById('goToPage').addEventListener('click', () => {
+      const val = document.getElementById('pageInput').value.trim();
+      if (!val) return;
+      const num = val.replace(/[০-৯]/g, d => '০১২৩৪৫৬৭৮৯'.indexOf(d));
+      for (let i = 0; i < pages.length; i++) {
+        const pageNum = pages[i].label.replace(/[০-৯]/g, d => '০১২৩৪৫৬৭৮৯'.indexOf(d));
+        if (pageNum === num || pages[i].label === val) {
+          goToPage(i);
+          document.getElementById('pageInput').value = '';
+          return;
+        }
+      }
+      const idx = parseInt(num) - 1;
+      if (!isNaN(idx)) goToPage(idx);
+      document.getElementById('pageInput').value = '';
+    });
+
+    document.getElementById('pageInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('goToPage').click();
+    });
+
+    // Keyboard
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        goToPage(currentPage + 1, 'forward');
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        goToPage(currentPage - 1, 'backward');
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        goToPage(0, 'backward');
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        goToPage(pages.length - 1, 'forward');
+      }
+    });
+
+    // Touch swipe
+    let touchStartX = 0;
+    document.querySelector('.page-wrapper').addEventListener('touchstart', (e) => {
+      touchStartX = e.changedTouches[0].clientX;
+    }, { passive: true });
+
+    document.querySelector('.page-wrapper').addEventListener('touchend', (e) => {
+      const diff = touchStartX - e.changedTouches[0].clientX;
+      if (Math.abs(diff) > 50) {
+        if (diff > 0) goToPage(currentPage + 1, 'forward');
+        else goToPage(currentPage - 1, 'backward');
+      }
+    }, { passive: true });
+
+    // ── Load Data ──
+    async function init() {
+      try {
+        const [textRes, jsonRes] = await Promise.all([
+          fetch('hadis-e-bornito-dua.txt'),
+          fetch('hadis-e-bornito-dua.json')
+        ]);
+
+        const textData = await textRes.text();
+        const jsonData = await jsonRes.json();
+
+        pages = parseBook(textData);
+        tocData = jsonData;
+
+        renderTOC();
+        currentPage = -1; // force first render
+        goToPage(0);
+
+        setTimeout(() => {
+          document.getElementById('loading').classList.add('hidden');
+        }, 300);
+
+      } catch (err) {
+        console.error('Error loading book:', err);
+        document.getElementById('loading').innerHTML = `
+          <div style="color:#e74c3c; text-align:center;">
+            <p>Error loading book data.</p>
+            <p style="font-size:0.8rem; margin-top:10px; color:#999;">${err.message}</p>
+            <p style="font-size:0.75rem; margin-top:15px; color:#888;">
+              Serve via a local server (not file://).<br>
+              Run: <code style="color:var(--cover-accent)">npx serve</code> or <code style="color:var(--cover-accent)">python -m http.server</code>
+            </p>
+          </div>
+        `;
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
