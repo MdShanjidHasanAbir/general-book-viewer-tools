@@ -28,5 +28,10 @@
     "id": "test - Copy",
     "name": "Test   Copy",
     "path": "output/test - Copy/book-output.json"
+  },
+  {
+    "id": "test-v2",
+    "name": "Test V2",
+    "path": "output/test-v2/book-output.json"
   }
 ]
