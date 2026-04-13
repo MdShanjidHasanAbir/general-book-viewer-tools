@@ -297,6 +297,16 @@
       line-height: 1.5;
     }
 
+    .page-content .arabic-inline-label {
+      direction: ltr;
+      text-align: right;
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: var(--heading-color);
+      margin: 10px 0 4px;
+      letter-spacing: 0.2px;
+    }
+
     .page-content .arabic-text {
       font-family: 'Amiri', 'Noto Naskh Arabic', serif;
       direction: rtl;
@@ -309,6 +319,10 @@
       background: rgba(26, 58, 94, 0.04);
       border-radius: 6px;
       border-right: 3px solid rgba(26, 58, 94, 0.2);
+    }
+
+    .page-content .arabic-inline-label + .arabic-text {
+      margin-top: 4px;
     }
 
     .page-content .note {
@@ -497,13 +511,19 @@
       let tocHTML = `<h2>সূচিপত্র</h2>`;
 
       tocData.forEach((chapter, ci) => {
+        const chapterTitle = chapter.chapter || '';
+        const chapterSections = Array.isArray(chapter.sections) ? chapter.sections : [];
+        const chapterClick = chapterSections.length
+          ? `toggleChapter(${ci})`
+          : `goToChapter('${escapeAttr(chapterTitle)}', ${ci})`;
+
         tocHTML += `<div class="toc-chapter">
-          <div class="toc-chapter-title" onclick="toggleChapter(${ci})" title="${chapter.chapter}">
-            ${chapter.chapter}
+          <div class="toc-chapter-title" onclick="${chapterClick}" title="${chapterTitle}">
+            ${chapterTitle}
           </div>
           <div class="toc-sections" id="tocSections${ci}">`;
 
-        chapter.sections.forEach(section => {
+        chapterSections.forEach(section => {
           tocHTML += `<div class="toc-section" onclick="goToSection('${escapeAttr(section)}')" title="${section}">${section}</div>`;
         });
 
@@ -521,17 +541,105 @@
       document.getElementById(`tocSections${idx}`).classList.toggle('expanded');
     }
 
+    function normalizeTitleForMatch(text) {
+      return (text || '')
+        .replace(/<br\s*\/?>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/[-\u2010-\u2015]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    }
+
+    function closeSidebarOnMobile() {
+      if (window.innerWidth < 900) {
+        document.getElementById('sidebar').classList.remove('open');
+      }
+    }
+
     function goToSection(sectionTitle) {
+      for (let i = 0; i < pages.length; i++) {
+        const heading = (pages[i].sectionHeading || '').trim();
+        if (heading && heading === sectionTitle) {
+          goToPage(i);
+          highlightTocItem(sectionTitle);
+          closeSidebarOnMobile();
+          return;
+        }
+      }
+
+      // Backward compatibility for older outputs without sectionHeading.
       for (let i = 0; i < pages.length; i++) {
         if (pages[i].html.includes(sectionTitle)) {
           goToPage(i);
           highlightTocItem(sectionTitle);
-          if (window.innerWidth < 900) {
-            document.getElementById('sidebar').classList.remove('open');
-          }
+          closeSidebarOnMobile();
           return;
         }
       }
+    }
+
+    function goToChapter(chapterTitle, chapterIndex) {
+      const chapterNorm = normalizeTitleForMatch(chapterTitle);
+      if (!chapterNorm) return;
+
+      for (let i = 0; i < pages.length; i++) {
+        const headingNorm = normalizeTitleForMatch(pages[i].sectionHeading || '');
+        if (!headingNorm) continue;
+
+        if (
+          headingNorm === chapterNorm ||
+          headingNorm.includes(chapterNorm) ||
+          chapterNorm.includes(headingNorm)
+        ) {
+          goToPage(i);
+          highlightChapterItem(chapterIndex, chapterTitle);
+          closeSidebarOnMobile();
+          return;
+        }
+      }
+
+      // Backward compatibility for older outputs without sectionHeading.
+      for (let i = 0; i < pages.length; i++) {
+        if (normalizeTitleForMatch(pages[i].html || '').includes(chapterNorm)) {
+          goToPage(i);
+          highlightChapterItem(chapterIndex, chapterTitle);
+          closeSidebarOnMobile();
+          return;
+        }
+      }
+    }
+
+    function highlightChapterItem(chapterIndex, chapterTitle) {
+      const sidebar = document.getElementById('sidebar');
+
+      sidebar.querySelectorAll('.toc-section.active').forEach(el => el.classList.remove('active'));
+      sidebar.querySelectorAll('.toc-chapter-title.active').forEach(el => el.classList.remove('active'));
+
+      let chapterTitleEl = null;
+      if (Number.isInteger(chapterIndex)) {
+        const sectionsDiv = document.getElementById(`tocSections${chapterIndex}`);
+        if (sectionsDiv) chapterTitleEl = sectionsDiv.previousElementSibling;
+      }
+
+      if (!chapterTitleEl) {
+        const allChapters = sidebar.querySelectorAll('.toc-chapter-title');
+        for (const item of allChapters) {
+          if (item.textContent.trim() === (chapterTitle || '').trim()) {
+            chapterTitleEl = item;
+            break;
+          }
+        }
+      }
+
+      if (!chapterTitleEl) return;
+
+      chapterTitleEl.classList.add('active');
+      const targetTop = chapterTitleEl.offsetTop - ((sidebar.clientHeight - chapterTitleEl.offsetHeight) / 2);
+      sidebar.scrollTo({
+        top: Math.max(0, targetTop),
+        behavior: 'smooth'
+      });
     }
 
     function highlightTocItem(sectionTitle) {
@@ -590,6 +698,40 @@
         if (!arabicBox.textContent.trim()) {
           arabicBox.remove();
         }
+      });
+
+      const arabicBoxes = root.querySelectorAll('.arabic-text');
+      const arabicCharRegex = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+      const bengaliCharRegex = /[\u0980-\u09FF]/;
+      const bengaliLabelHintRegex = /(দু['’]?আ|দো['’]?আ|দুয়া|দোয়া|আমল|দুরূদ|যিকির|তাসবীহ|সালাম)/;
+
+      arabicBoxes.forEach(arabicBox => {
+        const compactText = arabicBox.textContent.replace(/\s+/g, ' ').trim();
+        const firstArabicIndex = compactText.search(arabicCharRegex);
+        if (firstArabicIndex <= 0) return;
+
+        const prefix = compactText.slice(0, firstArabicIndex).trim();
+        const arabicOnly = compactText.slice(firstArabicIndex).trim();
+        if (!prefix || !arabicOnly) return;
+
+        const looksLikeLabel =
+          bengaliCharRegex.test(prefix) &&
+          prefix.length <= 64 &&
+          (
+            prefix.includes(':') ||
+            prefix.includes('ঃ') ||
+            /[\u09E6-\u09EF0-9]/.test(prefix) ||
+            bengaliLabelHintRegex.test(prefix)
+          );
+
+        if (!looksLikeLabel) return;
+
+        const labelEl = document.createElement('div');
+        labelEl.className = 'arabic-inline-label';
+        labelEl.textContent = prefix;
+
+        arabicBox.parentElement.insertBefore(labelEl, arabicBox);
+        arabicBox.textContent = arabicOnly;
       });
     }
 

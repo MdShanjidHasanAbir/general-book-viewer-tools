@@ -44,6 +44,10 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 BOOKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'books')
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
 
+ARABIC_CHAR_RE = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+BENGALI_CHAR_RE = re.compile(r'[\u0980-\u09FF]')
+BENGALI_LABEL_HINT_RE = re.compile(r"(দু['’]?আ|দো['’]?আ|দুয়া|দোয়া|আমল|দুরূদ|যিকির|তাসবীহ|সালাম)")
+
 
 def classify_line(line):
     """Classify a line as arabic, empty, or other based on character ratios."""
@@ -62,6 +66,40 @@ def classify_line(line):
         return 'arabic', line.strip()
 
     return 'other', line
+
+
+def split_leading_bengali_label(text):
+    """
+    Extract Bengali label prefixes from mixed lines like:
+    "দু'আ ৫: ...Arabic..."
+    Returns: (label_prefix, arabic_part)
+    """
+    stripped = re.sub(r'<[^>]+>', '', text).strip()
+    if not stripped:
+        return '', stripped
+
+    first_arabic = ARABIC_CHAR_RE.search(stripped)
+    if not first_arabic:
+        return '', stripped
+
+    prefix = stripped[:first_arabic.start()].strip()
+    arabic_part = stripped[first_arabic.start():].strip()
+    if not prefix or not arabic_part:
+        return '', stripped
+
+    if not BENGALI_CHAR_RE.search(prefix):
+        return '', stripped
+
+    looks_like_label = (
+        ':' in prefix
+        or 'ঃ' in prefix
+        or re.search(r'[\u09E6-\u09EF0-9]', prefix) is not None
+        or BENGALI_LABEL_HINT_RE.search(prefix) is not None
+    )
+    if not looks_like_label or len(prefix) > 64:
+        return '', stripped
+
+    return prefix, arabic_part
 
 
 def format_content(raw):
@@ -89,14 +127,31 @@ def format_content(raw):
     processed = []
     arabic_buffer = []
 
-    for line_type, content in classified:
+    for idx, (line_type, content) in enumerate(classified):
         if line_type == 'arabic':
+            label_prefix, arabic_only = split_leading_bengali_label(content)
+            if label_prefix:
+                if arabic_buffer:
+                    processed.append(f'<div class="arabic-text">{" ".join(arabic_buffer)}</div>')
+                    arabic_buffer = []
+                processed.append(f'<div class="arabic-inline-label">{label_prefix}</div>')
+                content = arabic_only
             arabic_buffer.append(content)
-        else:
-            if arabic_buffer:
-                processed.append(f'<div class="arabic-text">{" ".join(arabic_buffer)}</div>')
-                arabic_buffer = []
-            processed.append(content)
+            continue
+        # If Arabic lines are separated only by blank lines, keep them together
+        # in one arabic-text block instead of splitting into multiple boxes.
+        if line_type == 'empty' and arabic_buffer:
+            next_type = None
+            for j in range(idx + 1, len(classified)):
+                if classified[j][0] != 'empty':
+                    next_type = classified[j][0]
+                    break
+            if next_type == 'arabic':
+                continue
+        if arabic_buffer:
+            processed.append(f'<div class="arabic-text">{" ".join(arabic_buffer)}</div>')
+            arabic_buffer = []
+        processed.append(content)
 
     if arabic_buffer:
         processed.append(f'<div class="arabic-text">{" ".join(arabic_buffer)}</div>')
@@ -108,6 +163,47 @@ def format_content(raw):
     html = re.sub(r'^(<br>\s*)+', '', html)
 
     return f'<div class="page-text">{html}</div>'
+
+
+def split_page_content_by_heading(content):
+    """Split a page into chunks where each <heading> starts a new section chunk."""
+    heading_pattern = re.compile(r'<heading>[\s\S]*?</heading>', re.IGNORECASE)
+    matches = list(heading_pattern.finditer(content))
+
+    if not matches:
+        return [{'hasHeading': False, 'content': content}] if content.strip() else []
+
+    chunks = []
+    cursor = 0
+    for i, match in enumerate(matches):
+        leading = content[cursor:match.start()]
+        if leading.strip():
+            chunks.append({'hasHeading': False, 'content': leading})
+
+        next_start = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        section_chunk = content[match.start():next_start]
+        if section_chunk.strip():
+            chunks.append({'hasHeading': True, 'content': section_chunk})
+
+        cursor = next_start
+
+    trailing = content[cursor:]
+    if trailing.strip():
+        chunks.append({'hasHeading': False, 'content': trailing})
+
+    return chunks
+
+
+def extract_notes(content):
+    """Extract <note> blocks from content and return cleaned text and note list."""
+    notes = []
+
+    def collect_note(m):
+        notes.append(m.group(1).strip())
+        return ''
+
+    cleaned = re.sub(r'<note>([\s\S]*?)</note>', collect_note, content, flags=re.IGNORECASE)
+    return cleaned, notes
 
 
 def parse_book(text):
@@ -126,62 +222,63 @@ def parse_book(text):
         content = chunk[close_idx + len('</page_number>'):].strip()
 
         # Extract page label (Bengali or ASCII digits)
-        num_match = re.search(r'[০-৯\d]+', page_num_raw)
+        num_match = re.search(r'[\u09E6-\u09EF\d]+', page_num_raw)
         page_label = num_match.group(0) if num_match else page_num_raw
-
-        # Extract notes
-        notes = []
-        def collect_note(m):
-            notes.append(m.group(1).strip())
-            return ''
-
-        content = re.sub(r'<note>([\s\S]*?)</note>', collect_note, content, flags=re.IGNORECASE)
-
-        has_heading = bool(re.search(r'<heading>', content, re.IGNORECASE))
 
         raw_pages.append({
             'label': page_label,
             'fullLabel': page_num_raw,
             'content': content,
-            'notes': notes,
-            'hasHeading': has_heading,
         })
 
-    # Group pages into sections (a section starts at a <heading> or at index 0)
+    # Group chunks into sections.
+    # A section starts at each heading, even when multiple headings exist
+    # inside the same original page.
     sections = []
-    for i, page in enumerate(raw_pages):
-        if page['hasHeading'] or i == 0:
-            sections.append([page])
-        else:
-            sections[-1].append(page)
+    current_section = None
+
+    for page in raw_pages:
+        chunks = split_page_content_by_heading(page['content'])
+        for chunk in chunks:
+            chunk_content, chunk_notes = extract_notes(chunk['content'])
+
+            if chunk['hasHeading'] or current_section is None:
+                current_section = {'parts': [], 'notes': [], 'labels': []}
+                sections.append(current_section)
+
+            if chunk_content.strip():
+                current_section['parts'].append(chunk_content)
+            current_section['notes'].extend(chunk_notes)
+
+            if not current_section['labels'] or current_section['labels'][-1] != page['label']:
+                current_section['labels'].append(page['label'])
 
     # Build one combined page per section
     result = []
-    for section_pages in sections:
+    for section in sections:
         combined_html = ''
-        all_notes = []
-        raw_texts = []
+        raw_texts = section['parts']
+        all_notes = section['notes']
 
-        for pg in section_pages:
-            combined_html += format_content(pg['content'])
-            all_notes.extend(pg['notes'])
-            raw_texts.append(pg['content'])
+        # Format the entire section in one pass so long Arabic quotations are not
+        # split into separate blocks when source page boundaries occur mid-quote.
+        if raw_texts:
+            combined_html = format_content(''.join(raw_texts))
 
         # Append footnotes
         if all_notes:
             combined_html += (
                 '<div class="section-footnotes">'
-                '<div class="section-footnotes-label">তথ্যসূত্র</div>'
+                '<div class="section-footnotes-label">\u09a4\u09a5\u09cd\u09af\u09b8\u09c2\u09a4\u09cd\u09b0</div>'
                 f'<div class="note">{"<br>".join(all_notes)}</div>'
                 '</div>'
             )
 
         # Page label: range if section spans multiple original pages
-        first_label = section_pages[0]['label']
-        last_label = section_pages[-1]['label']
+        original_labels = section['labels']
+        first_label = original_labels[0]
+        last_label = original_labels[-1]
         label = first_label if first_label == last_label else f'{first_label}-{last_label}'
-
-        original_labels = [p['label'] for p in section_pages]
 
         # Extract plain text content (strip heading and HTML tags)
         raw_content = '\n'.join(raw_texts)
@@ -206,7 +303,6 @@ def parse_book(text):
         })
 
     return result
-
 
 def detect_files_in_folder(folder_path):
     """Detect .txt and .json files inside a book folder."""
@@ -272,7 +368,18 @@ def generate_xlsx(toc_data, pages, output_path):
         cell.alignment = Alignment(horizontal='center', vertical='center')
         cell.border = thin_border
 
-    # Map pages to chapters sequentially using TOC
+    # Build normalized title sets for safer matching.
+    def normalize_title(value):
+        return re.sub(r'\s+', ' ', (value or '')).strip()
+
+    chapter_titles = {normalize_title(ch.get('chapter', '')) for ch in toc_data}
+
+    # Skip chapter-title-only pages and map remaining pages sequentially to sections.
+    content_pages = [
+        pg for pg in pages
+        if normalize_title(pg.get('sectionHeading', '')) not in chapter_titles
+    ]
+
     page_idx = 0
     row = 2
     for ch_idx, chapter in enumerate(toc_data):
@@ -284,10 +391,10 @@ def generate_xlsx(toc_data, pages, output_path):
             content = ''
             notes = ''
 
-            if page_idx < len(pages):
-                pg = pages[page_idx]
-                content = pg['plainContent']
-                notes = pg['plainNotes']
+            if page_idx < len(content_pages):
+                pg = content_pages[page_idx]
+                content = pg.get('plainContent', '')
+                notes = pg.get('plainNotes', '')
                 page_idx += 1
 
             ws.cell(row=row, column=1, value=chapter_id).border = thin_border
@@ -365,6 +472,7 @@ def parse_single_book(book_name, book_folder):
             'label': pg['label'],
             'originalLabels': pg['originalLabels'],
             'html': pg['html'],
+            'sectionHeading': pg['sectionHeading'],
         })
 
     output = {
@@ -387,8 +495,12 @@ def parse_single_book(book_name, book_folder):
 
     # Generate xlsx file
     xlsx_path = os.path.join(book_output_dir, 'book-output.xlsx')
-    xlsx_rows = generate_xlsx(toc_data, pages, xlsx_path)
-    print(f'  XLSX -> output/{book_name}/book-output.xlsx ({xlsx_rows} rows)')
+    try:
+        xlsx_rows = generate_xlsx(toc_data, pages, xlsx_path)
+        print(f'  XLSX -> output/{book_name}/book-output.xlsx ({xlsx_rows} rows)')
+    except PermissionError:
+        print(f'  Warning: Could not write output/{book_name}/book-output.xlsx (file is open).')
+        print('  Close the file and run parser again to refresh XLSX output.')
 
     return True
 
@@ -424,7 +536,15 @@ Examples:
 
         pages = parse_book(text_data)
 
-        json_pages = [{'label': pg['label'], 'originalLabels': pg['originalLabels'], 'html': pg['html']} for pg in pages]
+        json_pages = [
+            {
+                'label': pg['label'],
+                'originalLabels': pg['originalLabels'],
+                'html': pg['html'],
+                'sectionHeading': pg['sectionHeading'],
+            }
+            for pg in pages
+        ]
         output = {'toc': toc_data, 'pages': json_pages}
 
         with open(output_path, 'w', encoding='utf-8') as f:
@@ -433,8 +553,12 @@ Examples:
         print(f'Parsed {len(pages)} pages -> {output_path}')
 
         xlsx_path = os.path.splitext(output_path)[0] + '.xlsx'
-        xlsx_rows = generate_xlsx(toc_data, pages, xlsx_path)
-        print(f'XLSX -> {xlsx_path} ({xlsx_rows} rows)')
+        try:
+            xlsx_rows = generate_xlsx(toc_data, pages, xlsx_path)
+            print(f'XLSX -> {xlsx_path} ({xlsx_rows} rows)')
+        except PermissionError:
+            print(f'Warning: Could not write {xlsx_path} (file is open).')
+            print('Close the file and run parser again to refresh XLSX output.')
         return
 
     # Single book by name
@@ -477,3 +601,4 @@ Examples:
 
 if __name__ == '__main__':
     main()
+
