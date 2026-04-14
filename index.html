@@ -1107,7 +1107,7 @@
       return (value || '').replace(/\s+/g, ' ').trim();
     }
 
-    function extractPlainFromHtml(html) {
+    function extractTaggedFromHtml(html) {
       const tmp = document.createElement('div');
       tmp.innerHTML = html || '';
 
@@ -1123,10 +1123,10 @@
       }
 
       tmp.querySelectorAll('.heading').forEach(el => el.remove());
-      tmp.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
 
-      let contentText = tmp.textContent.replace(/\n{3,}/g, '\n\n').trim();
-      return { content: contentText, notes: notesText };
+      // Preserve remaining markup/tags in content for XLSX export.
+      let contentHtml = tmp.innerHTML.trim();
+      return { content: contentHtml, notes: notesText };
     }
 
     function currentBookDisplayName() {
@@ -1271,7 +1271,7 @@
           let content = '';
           let notes = '';
           if (sectionPages.length) {
-            const extractedParts = sectionPages.map(pg => extractPlainFromHtml(pg.html || ''));
+            const extractedParts = sectionPages.map(pg => extractTaggedFromHtml(pg.html || ''));
             content = extractedParts.map(part => part.content).filter(Boolean).join('\n\n');
             notes = extractedParts.map(part => part.notes).filter(Boolean).join('\n\n');
           }
@@ -1291,7 +1291,7 @@
       if (ws.rowCount <= 1) {
         for (let i = 0; i < safePages.length; i++) {
           const page = safePages[i];
-          const extracted = extractPlainFromHtml(page.html || '');
+          const extracted = extractTaggedFromHtml(page.html || '');
           addStyledExportRow({
             chapter_id: '',
             chapter_name: '',
