@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Book Viewer</title>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Amiri:wght@400;700&display=swap');
 
@@ -307,7 +308,9 @@
       letter-spacing: 0.2px;
     }
 
-    .page-content .arabic-text {
+    .page-content .arabic-text,
+    .page-content ar {
+      display: block;
       font-family: 'Amiri', 'Noto Naskh Arabic', serif;
       direction: rtl;
       text-align: right;
@@ -463,10 +466,22 @@
           সূচিপত্র
         </button>
       </div>
-      <div class="topbar-center" style="display:flex;align-items:center;gap:10px;">
-        <select class="book-select" id="bookSelect">
+      <div class="topbar-center" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <select class="book-select" id="bookSelect" title="Parsed books (from output/)">
           <option value="">Loading books...</option>
         </select>
+        <select class="book-select" id="directBookSelect" title="Direct books (from direct-books/)">
+          <option value="">Direct books…</option>
+        </select>
+        <button class="btn" id="loadJsonBtn" title="Load a JSON book from disk">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Load JSON
+        </button>
+        <input type="file" id="jsonFileInput" accept=".json,application/json" style="display:none;">
+        <button class="btn" id="downloadXlsxBtn" title="Download current book as XLSX">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          XLSX
+        </button>
       </div>
       <div class="topbar-right">
         <div class="page-jump">
@@ -504,6 +519,9 @@
     let currentPage = 0;
     let isAnimating = false;
     let booksIndex = [];
+    let directBooksIndex = [];
+    const uploadedBooks = new Map();
+    let uploadedBookSeq = 0;
 
     // ── Render TOC ──
     function renderTOC() {
@@ -678,6 +696,23 @@
     }
 
     // ── Rendering ──
+    function rewriteArTags(root) {
+      const arEls = root.querySelectorAll('ar');
+      arEls.forEach(el => {
+        const div = document.createElement('div');
+        div.className = 'arabic-text';
+        while (el.firstChild) div.appendChild(el.firstChild);
+        for (const attr of el.attributes) {
+          if (attr.name === 'class') {
+            div.className = ('arabic-text ' + attr.value).trim();
+          } else {
+            div.setAttribute(attr.name, attr.value);
+          }
+        }
+        el.parentElement.replaceChild(div, el);
+      });
+    }
+
     function fixMergedArabicHeadings(root) {
       const headings = root.querySelectorAll('.arabic-text > .heading');
 
@@ -742,6 +777,7 @@
       const indicator = document.getElementById('pageIndicator');
 
       contentEl.innerHTML = pages[idx].html;
+      rewriteArTags(contentEl);
       fixMergedArabicHeadings(contentEl);
       numEl.textContent = pages[idx].label;
       pageEl.scrollTop = 0;
@@ -877,27 +913,121 @@
     // ── Book Selector ──
     document.getElementById('bookSelect').addEventListener('change', (e) => {
       const path = e.target.value;
-      if (path) loadBook(path);
+      if (!path) return;
+      document.getElementById('directBookSelect').value = '';
+      loadBook(path);
     });
+
+    document.getElementById('directBookSelect').addEventListener('change', (e) => {
+      const path = e.target.value;
+      if (!path) return;
+      document.getElementById('bookSelect').value = '';
+      loadBook(path);
+    });
+
+    function renderBook(bookData, title) {
+      if (!bookData || !Array.isArray(bookData.pages)) {
+        throw new Error('Invalid book JSON: missing "pages" array.');
+      }
+      pages = bookData.pages;
+      tocData = Array.isArray(bookData.toc) ? bookData.toc : [];
+
+      renderTOC();
+      currentPage = -1; // force first render
+      goToPage(0);
+
+      if (title) document.title = title + ' - Book Viewer';
+    }
+
+    function findOptionLabel(selectEl, value) {
+      if (!selectEl) return '';
+      const opt = Array.from(selectEl.options).find(o => o.value === value);
+      return opt ? opt.textContent : '';
+    }
+
+    function refreshDirectBooksDropdown(selectedValue = '') {
+      const directSel = document.getElementById('directBookSelect');
+      const preservedValue = selectedValue || directSel.value || '';
+      directSel.innerHTML = '';
+
+      const hasIndexed = Array.isArray(directBooksIndex) && directBooksIndex.length > 0;
+      const hasUploaded = uploadedBooks.size > 0;
+
+      if (!hasIndexed && !hasUploaded) {
+        directSel.innerHTML = '<option value="">Direct books (empty)</option>';
+        return;
+      }
+
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Direct books...';
+      directSel.appendChild(placeholder);
+
+      if (hasIndexed) {
+        directBooksIndex.forEach(book => {
+          const opt = document.createElement('option');
+          opt.value = book.path || `direct-books/${book.file || book.id}`;
+          opt.textContent = book.name || book.id || book.file || 'Untitled';
+          directSel.appendChild(opt);
+        });
+      }
+
+      if (hasUploaded) {
+        for (const [virtualPath, entry] of uploadedBooks.entries()) {
+          const opt = document.createElement('option');
+          opt.value = virtualPath;
+          opt.textContent = entry.name;
+          directSel.appendChild(opt);
+        }
+      }
+
+      if (preservedValue && Array.from(directSel.options).some(o => o.value === preservedValue)) {
+        directSel.value = preservedValue;
+      }
+    }
+
+    function upsertUploadedBook(displayName, bookData) {
+      let existingPath = '';
+      for (const [path, entry] of uploadedBooks.entries()) {
+        if (entry.name === displayName) {
+          existingPath = path;
+          break;
+        }
+      }
+
+      const virtualPath = existingPath || `uploaded://${Date.now()}-${++uploadedBookSeq}`;
+      uploadedBooks.set(virtualPath, { name: displayName, data: bookData });
+      refreshDirectBooksDropdown(virtualPath);
+      return virtualPath;
+    }
 
     async function loadBook(jsonPath) {
       document.getElementById('loading').classList.remove('hidden');
 
       try {
-        const res = await fetch(jsonPath);
-        const bookData = await res.json();
+        let bookData = null;
+        if (jsonPath.startsWith('uploaded://')) {
+          const uploaded = uploadedBooks.get(jsonPath);
+          if (!uploaded) {
+            throw new Error('Uploaded book not found. Please load the JSON again.');
+          }
+          bookData = uploaded.data;
+        } else {
+          const res = await fetch(jsonPath);
+          if (!res.ok) {
+            throw new Error(`Failed to fetch book JSON (${res.status}).`);
+          }
+          bookData = await res.json();
+        }
 
-        pages = bookData.pages;
-        tocData = bookData.toc;
-
-        renderTOC();
-        currentPage = -1; // force first render
-        goToPage(0);
-
-        // Update page title
-        const select = document.getElementById('bookSelect');
-        const selected = select.options[select.selectedIndex];
-        if (selected) document.title = selected.textContent + ' - Book Viewer';
+        // Title can come from either selector (whichever currently matches this path).
+        const bookSel = document.getElementById('bookSelect');
+        const directSel = document.getElementById('directBookSelect');
+        let title = findOptionLabel(bookSel, jsonPath) || findOptionLabel(directSel, jsonPath);
+        if (!title && jsonPath.startsWith('uploaded://')) {
+          title = uploadedBooks.get(jsonPath)?.name || '';
+        }
+        renderBook(bookData, title);
 
         setTimeout(() => {
           document.getElementById('loading').classList.add('hidden');
@@ -918,9 +1048,294 @@
       }
     }
 
-    // ── Load Data ──
+    // ── Direct-JSON Loader (no parser / server required) ──
+    document.getElementById('loadJsonBtn').addEventListener('click', () => {
+      document.getElementById('jsonFileInput').click();
+    });
+
+    document.getElementById('jsonFileInput').addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      document.getElementById('loading').classList.remove('hidden');
+      const reader = new FileReader();
+
+      reader.onload = (ev) => {
+        try {
+          const bookData = JSON.parse(ev.target.result);
+          if (!bookData || !Array.isArray(bookData.pages)) {
+            throw new Error('Invalid book JSON: missing \"pages\" array.');
+          }
+          const displayName = file.name.replace(/\.json$/i, '');
+          const virtualPath = upsertUploadedBook(displayName, bookData);
+
+          // Reset both selectors so the picked file is clearly active.
+          document.getElementById('bookSelect').value = '';
+          document.getElementById('directBookSelect').value = virtualPath;
+
+          renderBook(bookData, displayName);
+
+          setTimeout(() => {
+            document.getElementById('loading').classList.add('hidden');
+          }, 300);
+        } catch (err) {
+          console.error('Error parsing JSON:', err);
+          document.getElementById('loading').innerHTML = `
+            <div style="color:#e74c3c; text-align:center;">
+              <p>Could not load this JSON file.</p>
+              <p style="font-size:0.8rem; margin-top:10px; color:#999;">${err.message}</p>
+            </div>
+          `;
+        }
+      };
+
+      reader.onerror = () => {
+        document.getElementById('loading').innerHTML = `
+          <div style="color:#e74c3c; text-align:center;">
+            <p>Could not read the selected file.</p>
+          </div>
+        `;
+      };
+
+      reader.readAsText(file);
+      // Allow picking the same file again later.
+      e.target.value = '';
+    });
+
+    // ── XLSX Download (mirrors parser.py output format) ──
+    function normalizeTitleForXlsx(value) {
+      return (value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function extractPlainFromHtml(html) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html || '';
+
+      let notesText = '';
+      const footnotes = tmp.querySelector('.section-footnotes');
+      if (footnotes) {
+        const noteEl = footnotes.querySelector('.note');
+        if (noteEl) {
+          noteEl.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+          notesText = noteEl.textContent.trim();
+        }
+        footnotes.remove();
+      }
+
+      tmp.querySelectorAll('.heading').forEach(el => el.remove());
+      tmp.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+
+      let contentText = tmp.textContent.replace(/\n{3,}/g, '\n\n').trim();
+      return { content: contentText, notes: notesText };
+    }
+
+    function currentBookDisplayName() {
+      const bookSel = document.getElementById('bookSelect');
+      const directSel = document.getElementById('directBookSelect');
+      let name = '';
+      if (bookSel.value) name = findOptionLabel(bookSel, bookSel.value);
+      else if (directSel.value) name = findOptionLabel(directSel, directSel.value);
+      return (name || 'book-output').replace(/[\\/:*?"<>|]/g, '_');
+    }
+
+    function triggerBlobDownload(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+
+      // Revoke later: immediate revoke can cancel large-file downloads in some browsers.
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        a.remove();
+      }, 15000);
+    }
+
+    async function downloadXlsx() {
+      if (!pages.length) {
+        alert('No book loaded.');
+        return;
+      }
+      if (typeof ExcelJS === 'undefined') {
+        alert('ExcelJS library failed to load. Check your internet connection.');
+        return;
+      }
+
+      const workbook = new ExcelJS.Workbook();
+      const ws = workbook.addWorksheet('Book Content');
+
+      ws.columns = [
+        { header: 'chapter_id', key: 'chapter_id', width: 12 },
+        { header: 'chapter_name', key: 'chapter_name', width: 35 },
+        { header: 'section_id', key: 'section_id', width: 12 },
+        { header: 'section_name', key: 'section_name', width: 40 },
+        { header: 'content', key: 'content', width: 60 },
+        { header: 'notes', key: 'notes', width: 40 },
+      ];
+
+      const thinBorder = {
+        top: { style: 'thin' }, bottom: { style: 'thin' },
+        left: { style: 'thin' }, right: { style: 'thin' },
+      };
+
+      const headerRow = ws.getRow(1);
+      headerRow.eachCell(cell => {
+        cell.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
+        cell.alignment = { horizontal: 'center', vertical: 'center' };
+        cell.border = thinBorder;
+      });
+
+      const safeToc = Array.isArray(tocData)
+        ? tocData.filter(ch => ch && typeof ch === 'object')
+        : [];
+      const safePages = Array.isArray(pages)
+        ? pages.filter(pg => pg && typeof pg === 'object')
+        : [];
+
+      function addStyledExportRow(rowData) {
+        const row = ws.addRow(rowData);
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          cell.border = thinBorder;
+          if (colNumber === 5 || colNumber === 6) {
+            cell.alignment = { wrapText: true, vertical: 'top' };
+          }
+        });
+      }
+
+      const chapterMeta = safeToc.map((chapter, chIdx) => {
+        const chapterName = (chapter.chapter || '').trim();
+        const rawSections = Array.isArray(chapter.sections)
+          ? chapter.sections.map(s => String(s || '').trim()).filter(Boolean)
+          : [];
+        const sections = rawSections.length
+          ? rawSections
+          : [chapterName || `Chapter ${chIdx + 1}`];
+        return { chapterName, rawSections, sections };
+      });
+
+      // Map headings to chapter index so pages can be grouped by chapter.
+      const headingToChapterIndex = new Map();
+      chapterMeta.forEach((meta, chIdx) => {
+        const chapterNorm = normalizeTitleForXlsx(meta.chapterName);
+        if (chapterNorm && !headingToChapterIndex.has(chapterNorm)) {
+          headingToChapterIndex.set(chapterNorm, chIdx);
+        }
+        meta.rawSections.forEach(sectionName => {
+          const sectionNorm = normalizeTitleForXlsx(sectionName);
+          if (sectionNorm && !headingToChapterIndex.has(sectionNorm)) {
+            headingToChapterIndex.set(sectionNorm, chIdx);
+          }
+        });
+      });
+
+      const chapterPages = chapterMeta.map(() => []);
+      let currentChapterIdx = chapterMeta.length ? 0 : -1;
+      safePages.forEach(page => {
+        const headingNorm = normalizeTitleForXlsx(page.sectionHeading || '');
+        if (headingNorm && headingToChapterIndex.has(headingNorm)) {
+          currentChapterIdx = headingToChapterIndex.get(headingNorm);
+        }
+        if (currentChapterIdx >= 0 && currentChapterIdx < chapterPages.length) {
+          chapterPages[currentChapterIdx].push(page);
+        }
+      });
+
+      for (let chIdx = 0; chIdx < chapterMeta.length; chIdx++) {
+        const meta = chapterMeta[chIdx];
+        const pagesForChapter = chapterPages[chIdx] || [];
+        let pageCursor = 0;
+
+        for (let secIdx = 0; secIdx < meta.sections.length; secIdx++) {
+          let sectionPages = [];
+
+          if (meta.rawSections.length === 0) {
+            // No sections in this chapter: create one section and include all chapter content.
+            sectionPages = pagesForChapter.slice(pageCursor);
+            pageCursor = pagesForChapter.length;
+          } else {
+            // Keep one-row-per-section; if extra pages exist, append them to the last section.
+            if (pageCursor < pagesForChapter.length) {
+              sectionPages.push(pagesForChapter[pageCursor]);
+              pageCursor += 1;
+            }
+            if (secIdx === meta.sections.length - 1 && pageCursor < pagesForChapter.length) {
+              sectionPages = sectionPages.concat(pagesForChapter.slice(pageCursor));
+              pageCursor = pagesForChapter.length;
+            }
+          }
+
+          let content = '';
+          let notes = '';
+          if (sectionPages.length) {
+            const extractedParts = sectionPages.map(pg => extractPlainFromHtml(pg.html || ''));
+            content = extractedParts.map(part => part.content).filter(Boolean).join('\n\n');
+            notes = extractedParts.map(part => part.notes).filter(Boolean).join('\n\n');
+          }
+
+          addStyledExportRow({
+            chapter_id: chIdx + 1,
+            chapter_name: meta.chapterName,
+            section_id: secIdx + 1,
+            section_name: meta.sections[secIdx],
+            content,
+            notes,
+          });
+        }
+      }
+
+      // Fallback for direct/manual JSONs that have no usable TOC sections.
+      if (ws.rowCount <= 1) {
+        for (let i = 0; i < safePages.length; i++) {
+          const page = safePages[i];
+          const extracted = extractPlainFromHtml(page.html || '');
+          addStyledExportRow({
+            chapter_id: '',
+            chapter_name: '',
+            section_id: i + 1,
+            section_name: page.sectionHeading || `Page ${page.label || i + 1}`,
+            content: extracted.content,
+            notes: extracted.notes,
+          });
+        }
+      }
+
+      ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      triggerBlobDownload(blob, `${currentBookDisplayName()}.xlsx`);
+    }
+
+    document.getElementById('downloadXlsxBtn').addEventListener('click', () => {
+      downloadXlsx().catch(err => {
+        console.error('XLSX download failed:', err);
+        alert('Could not generate XLSX: ' + err.message);
+      });
+    });
+
+    // ── Direct-Books Index (separate list) ──
+    async function loadDirectBooksIndex() {
+      try {
+        const res = await fetch('direct-books/direct-books-index.json');
+        if (!res.ok) throw new Error('no index');
+        const list = await res.json();
+        directBooksIndex = Array.isArray(list) ? list : [];
+      } catch {
+        directBooksIndex = [];
+      }
+      refreshDirectBooksDropdown();
+    }
     async function init() {
       const select = document.getElementById('bookSelect');
+
+      // Populate the direct-books list in parallel; its failure must not block the main list.
+      loadDirectBooksIndex();
 
       try {
         // Try loading the books index
