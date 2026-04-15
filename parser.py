@@ -26,8 +26,15 @@ The .txt file uses these tags:
     <note>...</note>                - footnotes
     <br>                            - line breaks
 
-The .json file is an array of chapters:
-    [{"chapter": "...", "sections": ["...", ...]}, ...]
+The .json file can be either:
+  1) Plain hierarchy array (legacy):
+       [{"chapter": "...", "sections": ["...", ...]}, ...]
+  2) Object format with hierarchy + spelling patches:
+       {
+         "hierarchy": [...],
+         "global_patches": {"wrong": "correct", ...},
+         "page_patches": {"67": {"wrong": "correct"}, ...}
+       }
 """
 
 import json
@@ -40,6 +47,12 @@ import glob
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
+# Ensure Unicode prints work in Windows terminals.
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 
 BOOKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'books')
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
@@ -47,6 +60,8 @@ OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
 ARABIC_CHAR_RE = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
 BENGALI_CHAR_RE = re.compile(r'[\u0980-\u09FF]')
 BENGALI_LABEL_HINT_RE = re.compile(r"(দু['’]?আ|দো['’]?আ|দুয়া|দোয়া|আমল|দুরূদ|যিকির|তাসবীহ|সালাম)")
+SPECIAL_TAGS = ["meaning", "pronunciation"]
+TAG_PATTERN = re.compile(r"^<(" + "|".join(SPECIAL_TAGS) + r")>(.*)</\1>$", re.DOTALL)
 
 
 def classify_line(line):
@@ -100,6 +115,218 @@ def split_leading_bengali_label(text):
         return '', stripped
 
     return prefix, arabic_part
+
+
+def normalize_toc_data(raw_toc):
+    """Normalize chapter hierarchy into [{'chapter': str, 'sections': list[str]}]."""
+    if not isinstance(raw_toc, list):
+        raise ValueError('Invalid hierarchy format: expected a list')
+
+    normalized = []
+    for item in raw_toc:
+        if isinstance(item, dict):
+            chapter = str(item.get('chapter', '')).strip()
+            sections_raw = item.get('sections', [])
+        elif isinstance(item, str):
+            chapter = item.strip()
+            sections_raw = []
+        else:
+            continue
+
+        if not isinstance(sections_raw, list):
+            sections_raw = []
+        sections = [str(section).strip() for section in sections_raw]
+
+        normalized.append({
+            'chapter': chapter,
+            'sections': sections,
+        })
+
+    return normalized
+
+
+def as_replacement_map(value):
+    """Normalize replacement map into {old_text: new_text} with string keys/values."""
+    if not isinstance(value, dict):
+        return {}
+
+    normalized = {}
+    for old_text, new_text in value.items():
+        if not isinstance(old_text, str):
+            old_text = str(old_text)
+        if not isinstance(new_text, str):
+            new_text = str(new_text)
+        if old_text:
+            normalized[old_text] = new_text
+    return normalized
+
+
+def parse_label_patches_from_entries(entries):
+    """
+    Parse spelling entries like:
+      [{"label": "67", "m": {"wrong": "correct"}}, ...]
+    """
+    patches_by_label = {}
+    if not isinstance(entries, list):
+        return patches_by_label
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        label = str(entry.get('label', '')).strip()
+        if not label:
+            continue
+        replacement_map = as_replacement_map(entry.get('m'))
+        if replacement_map:
+            patches_by_label[label] = replacement_map
+    return patches_by_label
+
+
+def load_toc_and_spelling_config(json_path):
+    """Load TOC hierarchy + spelling patches from either legacy or new JSON format."""
+    with open(json_path, 'r', encoding='utf-8') as f:
+        raw_data = json.load(f)
+
+    if isinstance(raw_data, list):
+        return normalize_toc_data(raw_data), {'global': {}, 'by_label': {}}
+
+    if not isinstance(raw_data, dict):
+        raise ValueError(f'Unsupported JSON format in {json_path}')
+
+    raw_toc = raw_data.get('hierarchy')
+    if raw_toc is None:
+        raw_toc = raw_data.get('toc')
+    if raw_toc is None:
+        raise ValueError(
+            f"JSON file '{json_path}' must be a hierarchy list, or object with 'hierarchy'/'toc'"
+        )
+
+    global_patches = as_replacement_map(raw_data.get('global_patches'))
+    by_label = {}
+
+    for key in ('page_patches', 'patches_by_label'):
+        value = raw_data.get(key)
+        if isinstance(value, dict):
+            for label, patch_map in value.items():
+                normalized_map = as_replacement_map(patch_map)
+                if normalized_map:
+                    by_label[str(label)] = normalized_map
+
+    # Optional compatibility with spelling list structure:
+    # {"spelling_fixes": [{"label": "...", "m": {...}}, ...]}
+    by_label.update(parse_label_patches_from_entries(raw_data.get('spelling_fixes')))
+
+    # Optional compatibility with compact label->map structure:
+    # {"spelling_fixes": {"67": {"wrong": "correct"}}}
+    if isinstance(raw_data.get('spelling_fixes'), dict):
+        for label, patch_map in raw_data['spelling_fixes'].items():
+            normalized_map = as_replacement_map(patch_map)
+            if normalized_map:
+                by_label[str(label)] = normalized_map
+
+    return normalize_toc_data(raw_toc), {'global': global_patches, 'by_label': by_label}
+
+
+def strip_html_tags(value):
+    """Remove tags from text for plain-content replacements."""
+    return re.sub(r'<[^>]+>', '', value)
+
+
+def apply_spelling_patches(pages, patch_config):
+    """
+    Apply spelling patches after section hierarchy is built.
+    Supports:
+      - global patches for all pages
+      - page-label specific patches
+    """
+    global_patches = as_replacement_map(patch_config.get('global'))
+    by_label = patch_config.get('by_label', {})
+
+    if not global_patches and not by_label:
+        return {'replacements': 0, 'tags_added': 0}
+
+    total_replacements = 0
+    total_tags_added = 0
+    global_hits = {old_text: 0 for old_text in global_patches}
+
+    for page in pages:
+        label = str(page.get('label', ''))
+        label_candidates = {label}
+        for original_label in page.get('originalLabels', []):
+            label_candidates.add(str(original_label))
+
+        label_patches = {}
+        for candidate in label_candidates:
+            if candidate in by_label:
+                label_patches.update(as_replacement_map(by_label[candidate]))
+
+        html = page.get('html', '')
+        plain_content = page.get('plainContent', '')
+        plain_notes = page.get('plainNotes', '')
+        section_heading = page.get('sectionHeading', '')
+
+        page_replacements = 0
+        page_tags = 0
+
+        for old_text, new_text in global_patches.items():
+            match_count = html.count(old_text)
+            if match_count <= 0:
+                continue
+
+            html = html.replace(old_text, new_text)
+            global_hits[old_text] += match_count
+            page_replacements += match_count
+
+            if TAG_PATTERN.match(new_text.strip()):
+                page_tags += match_count
+
+            old_plain = strip_html_tags(old_text)
+            new_plain = strip_html_tags(new_text)
+            if old_plain:
+                plain_content = plain_content.replace(old_plain, new_plain)
+                plain_notes = plain_notes.replace(old_plain, new_plain)
+                section_heading = section_heading.replace(old_plain, new_plain)
+
+        for old_text, new_text in label_patches.items():
+            match_count = html.count(old_text)
+            if match_count <= 0:
+                preview = old_text[:60] + ('...' if len(old_text) > 60 else '')
+                print(f"  [WARNING] Label patch not found in page '{label}': {preview}")
+                continue
+
+            html = html.replace(old_text, new_text)
+            page_replacements += match_count
+
+            if TAG_PATTERN.match(new_text.strip()):
+                page_tags += match_count
+
+            old_plain = strip_html_tags(old_text)
+            new_plain = strip_html_tags(new_text)
+            if old_plain:
+                plain_content = plain_content.replace(old_plain, new_plain)
+                plain_notes = plain_notes.replace(old_plain, new_plain)
+                section_heading = section_heading.replace(old_plain, new_plain)
+
+        if page_replacements > 0:
+            tag_info = f' ({page_tags} tags added)' if page_tags else ''
+            print(f"  Spelling page '{label}': {page_replacements} replacements{tag_info}")
+
+        page['html'] = html
+        page['plainContent'] = plain_content
+        page['plainNotes'] = plain_notes
+        page['sectionHeading'] = section_heading
+
+        total_replacements += page_replacements
+        total_tags_added += page_tags
+
+    missing_globals = [old_text for old_text, hits in global_hits.items() if hits == 0]
+    if missing_globals:
+        print(f'  [WARNING] {len(missing_globals)} global patch(es) were not found in parsed pages')
+
+    return {
+        'replacements': total_replacements,
+        'tags_added': total_tags_added,
+    }
 
 
 def format_content(raw):
@@ -459,11 +686,11 @@ def parse_single_book(book_name, book_folder):
     with open(txt_file, 'r', encoding='utf-8') as f:
         text_data = f.read()
 
-    with open(json_file, 'r', encoding='utf-8') as f:
-        toc_data = json.load(f)
+    toc_data, patch_config = load_toc_and_spelling_config(json_file)
 
     # Parse the book
     pages = parse_book(text_data)
+    patch_stats = apply_spelling_patches(pages, patch_config)
 
     # Build JSON output
     json_pages = []
@@ -491,6 +718,8 @@ def parse_single_book(book_name, book_folder):
 
     print(f'  Parsed {len(pages)} pages')
     print(f'  TOC: {len(toc_data)} chapters')
+    if patch_stats['replacements'] > 0:
+        print(f"  Spelling fixes: {patch_stats['replacements']} replacements ({patch_stats['tags_added']} tags)")
     print(f'  JSON -> output/{book_name}/book-output.json')
 
     # Generate xlsx file
@@ -531,10 +760,10 @@ Examples:
 
         with open(txt_file, 'r', encoding='utf-8') as f:
             text_data = f.read()
-        with open(json_file, 'r', encoding='utf-8') as f:
-            toc_data = json.load(f)
+        toc_data, patch_config = load_toc_and_spelling_config(json_file)
 
         pages = parse_book(text_data)
+        patch_stats = apply_spelling_patches(pages, patch_config)
 
         json_pages = [
             {
@@ -551,6 +780,8 @@ Examples:
             json.dump(output, f, ensure_ascii=False, indent=2)
 
         print(f'Parsed {len(pages)} pages -> {output_path}')
+        if patch_stats['replacements'] > 0:
+            print(f"Spelling fixes: {patch_stats['replacements']} replacements ({patch_stats['tags_added']} tags)")
 
         xlsx_path = os.path.splitext(output_path)[0] + '.xlsx'
         try:
