@@ -43,6 +43,7 @@ import re
 import sys
 import argparse
 import glob
+from html import unescape
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -572,15 +573,15 @@ def discover_books():
 
 
 def generate_xlsx(toc_data, pages, output_path):
-    """Generate an xlsx file mapping chapters -> sections -> content -> notes."""
+    """Generate an xlsx file that mirrors the viewer's XLSX download output."""
     wb = Workbook()
     ws = wb.active
     ws.title = 'Book Content'
 
     # Header row
     headers = ['chapter_id', 'chapter_name', 'section_id', 'section_name', 'content', 'notes']
-    header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
-    header_font_white = Font(bold=True, size=12, color='FFFFFF')
+    header_fill = PatternFill(start_color='FF4472C4', end_color='FF4472C4', fill_type='solid')
+    header_font_white = Font(bold=True, size=12, color='FFFFFFFF')
     thin_border = Border(
         left=Side(style='thin'),
         right=Side(style='thin'),
@@ -595,49 +596,179 @@ def generate_xlsx(toc_data, pages, output_path):
         cell.alignment = Alignment(horizontal='center', vertical='center')
         cell.border = thin_border
 
-    # Build normalized title sets for safer matching.
     def normalize_title(value):
-        return re.sub(r'\s+', ' ', (value or '')).strip()
+        return re.sub(r'\s+', ' ', str(value or '')).strip()
 
-    chapter_titles = {normalize_title(ch.get('chapter', '')) for ch in toc_data}
+    def find_div_block_bounds(text, start_idx):
+        """Return (start, end) for a <div>...</div> block starting at start_idx."""
+        token_re = re.compile(r'<div\b[^>]*>|</div>', flags=re.IGNORECASE)
+        depth = 0
+        block_start = None
 
-    # Skip chapter-title-only pages and map remaining pages sequentially to sections.
-    content_pages = [
-        pg for pg in pages
-        if normalize_title(pg.get('sectionHeading', '')) not in chapter_titles
-    ]
+        for match in token_re.finditer(text, pos=start_idx):
+            token = match.group(0).lower()
+            if token.startswith('<div'):
+                if depth == 0:
+                    block_start = match.start()
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0 and block_start is not None:
+                    return block_start, match.end()
+                if depth < 0:
+                    break
 
-    page_idx = 0
-    row = 2
-    for ch_idx, chapter in enumerate(toc_data):
-        chapter_id = ch_idx + 1
-        chapter_name = chapter['chapter']
+        return None
 
-        for sec_idx, section_name in enumerate(chapter['sections']):
-            section_id = sec_idx + 1
+    def extract_tagged_from_html(html_text):
+        """Match the browser XLSX extraction: keep content HTML, notes as plain text."""
+        source_html = html_text or ''
+        notes_text = ''
+
+        footnotes_start = re.search(
+            r'<div\s+class=["\']section-footnotes["\'][^>]*>',
+            source_html,
+            flags=re.IGNORECASE,
+        )
+        if footnotes_start:
+            bounds = find_div_block_bounds(source_html, footnotes_start.start())
+            if bounds:
+                start, end = bounds
+                footnotes_html = source_html[start:end]
+                note_match = re.search(
+                    r'<div\s+class=["\']note["\'][^>]*>([\s\S]*?)</div>',
+                    footnotes_html,
+                    flags=re.IGNORECASE,
+                )
+                if note_match:
+                    note_html = note_match.group(1)
+                    note_html = re.sub(r'<br\s*/?>', '\n', note_html, flags=re.IGNORECASE)
+                    notes_text = unescape(re.sub(r'<[^>]+>', '', note_html)).strip()
+                source_html = source_html[:start] + source_html[end:]
+
+        source_html = re.sub(
+            r'<div\s+class=["\']heading["\'][^>]*>[\s\S]*?</div>',
+            '',
+            source_html,
+            flags=re.IGNORECASE,
+        )
+
+        return {
+            'content': source_html.strip(),
+            'notes': notes_text,
+        }
+
+    safe_toc = [ch for ch in toc_data if isinstance(ch, dict)] if isinstance(toc_data, list) else []
+    safe_pages = [pg for pg in pages if isinstance(pg, dict)] if isinstance(pages, list) else []
+
+    def add_styled_export_row(row_data):
+        ws.append([
+            row_data.get('chapter_id', ''),
+            row_data.get('chapter_name', ''),
+            row_data.get('section_id', ''),
+            row_data.get('section_name', ''),
+            row_data.get('content', ''),
+            row_data.get('notes', ''),
+        ])
+        row_number = ws.max_row
+        for col_number in range(1, 7):
+            cell = ws.cell(row=row_number, column=col_number)
+            cell.border = thin_border
+            if col_number in (5, 6):
+                cell.alignment = Alignment(wrap_text=True, vertical='top')
+
+    chapter_meta = []
+    for ch_idx, chapter in enumerate(safe_toc):
+        chapter_name = str(chapter.get('chapter', '')).strip()
+        raw_sections = chapter.get('sections', [])
+        if isinstance(raw_sections, list):
+            normalized_sections = [str(sec or '').strip() for sec in raw_sections]
+            normalized_sections = [sec for sec in normalized_sections if sec]
+        else:
+            normalized_sections = []
+
+        sections = normalized_sections or [chapter_name or f'Chapter {ch_idx + 1}']
+        chapter_meta.append({
+            'chapter_name': chapter_name,
+            'raw_sections': normalized_sections,
+            'sections': sections,
+        })
+
+    # Map section/chapter headings to chapter index so page grouping follows UI behavior.
+    heading_to_chapter_index = {}
+    for ch_idx, meta in enumerate(chapter_meta):
+        chapter_norm = normalize_title(meta['chapter_name'])
+        if chapter_norm and chapter_norm not in heading_to_chapter_index:
+            heading_to_chapter_index[chapter_norm] = ch_idx
+        for section_name in meta['raw_sections']:
+            section_norm = normalize_title(section_name)
+            if section_norm and section_norm not in heading_to_chapter_index:
+                heading_to_chapter_index[section_norm] = ch_idx
+
+    chapter_pages = [[] for _ in chapter_meta]
+    current_chapter_idx = 0 if chapter_meta else -1
+    for page in safe_pages:
+        heading_norm = normalize_title(page.get('sectionHeading', ''))
+        if heading_norm and heading_norm in heading_to_chapter_index:
+            current_chapter_idx = heading_to_chapter_index[heading_norm]
+
+        if 0 <= current_chapter_idx < len(chapter_pages):
+            chapter_pages[current_chapter_idx].append(page)
+
+    row_count = 0
+    for ch_idx, meta in enumerate(chapter_meta):
+        pages_for_chapter = chapter_pages[ch_idx] if ch_idx < len(chapter_pages) else []
+        page_cursor = 0
+
+        for sec_idx, section_name in enumerate(meta['sections']):
+            section_pages = []
+            if len(meta['raw_sections']) == 0:
+                # No TOC sections: keep one synthesized section with all chapter content.
+                section_pages = pages_for_chapter[page_cursor:]
+                page_cursor = len(pages_for_chapter)
+            else:
+                # One row per section; any overflow pages are appended to last section.
+                if page_cursor < len(pages_for_chapter):
+                    section_pages.append(pages_for_chapter[page_cursor])
+                    page_cursor += 1
+                if sec_idx == len(meta['sections']) - 1 and page_cursor < len(pages_for_chapter):
+                    section_pages.extend(pages_for_chapter[page_cursor:])
+                    page_cursor = len(pages_for_chapter)
+
             content = ''
             notes = ''
+            if section_pages:
+                extracted_parts = [extract_tagged_from_html(page.get('html', '')) for page in section_pages]
+                content = '\n\n'.join(part['content'] for part in extracted_parts if part['content'])
+                notes = '\n\n'.join(part['notes'] for part in extracted_parts if part['notes'])
 
-            if page_idx < len(content_pages):
-                pg = content_pages[page_idx]
-                content = pg.get('plainContent', '')
-                notes = pg.get('plainNotes', '')
-                page_idx += 1
+            add_styled_export_row({
+                'chapter_id': ch_idx + 1,
+                'chapter_name': meta['chapter_name'],
+                'section_id': sec_idx + 1,
+                'section_name': section_name,
+                'content': content,
+                'notes': notes,
+            })
+            row_count += 1
 
-            ws.cell(row=row, column=1, value=chapter_id).border = thin_border
-            ws.cell(row=row, column=2, value=chapter_name).border = thin_border
-            ws.cell(row=row, column=3, value=section_id).border = thin_border
-            ws.cell(row=row, column=4, value=section_name).border = thin_border
+    # Fallback for direct/manual JSON with no usable TOC rows.
+    if row_count == 0:
+        for i, page in enumerate(safe_pages):
+            extracted = extract_tagged_from_html(page.get('html', ''))
+            section_heading = str(page.get('sectionHeading', '') or '').strip()
+            label = str(page.get('label', '') or '').strip()
+            fallback_name = section_heading or f'Page {label or i + 1}'
 
-            content_cell = ws.cell(row=row, column=5, value=content)
-            content_cell.alignment = Alignment(wrap_text=True, vertical='top')
-            content_cell.border = thin_border
-
-            notes_cell = ws.cell(row=row, column=6, value=notes)
-            notes_cell.alignment = Alignment(wrap_text=True, vertical='top')
-            notes_cell.border = thin_border
-
-            row += 1
+            add_styled_export_row({
+                'chapter_id': '',
+                'chapter_name': '',
+                'section_id': i + 1,
+                'section_name': fallback_name,
+                'content': extracted['content'],
+                'notes': extracted['notes'],
+            })
+            row_count += 1
 
     # Set column widths
     ws.column_dimensions['A'].width = 12
@@ -651,7 +782,7 @@ def generate_xlsx(toc_data, pages, output_path):
     ws.freeze_panes = 'A2'
 
     wb.save(output_path)
-    return row - 2  # number of data rows
+    return row_count
 
 
 def generate_books_index(output_dir):
