@@ -23,8 +23,14 @@ Usage:
 The .txt file uses these tags:
     <page_number>...</page_number>  - page boundaries and labels
     <heading>...</heading>          - section headings
+    <subheading>...</subheading>    - sub-section headings (no section split)
+    <text>...</text>                - content blocks (wrapper, stripped during parse)
     <note>...</note>                - footnotes
     <br>                            - line breaks
+    <ar>...</ar>                    - Arabic text (rendered by viewer JS)
+    <pronunciation>...</pronunciation> - pronunciation guide (rendered by viewer JS)
+    <meaning>...</meaning>          - meaning/translation (rendered by viewer JS)
+    <p>...</p>                      - paragraphs
 
 The .json file can be either:
   1) Plain hierarchy array (legacy):
@@ -63,6 +69,12 @@ BENGALI_CHAR_RE = re.compile(r'[\u0980-\u09FF]')
 BENGALI_LABEL_HINT_RE = re.compile(r"(দু['’]?আ|দো['’]?আ|দুয়া|দোয়া|আমল|দুরূদ|যিকির|তাসবীহ|সালাম)")
 SPECIAL_TAGS = ["meaning", "pronunciation"]
 TAG_PATTERN = re.compile(r"^<(" + "|".join(SPECIAL_TAGS) + r")>(.*)</\1>$", re.DOTALL)
+STRAY_PAGE_NUMBER_LINE_RE = re.compile(
+    r'(?m)^[ \t\u00A0\u200B\u200C\u200D\uFEFF]*[\u09E6-\u09EF\d]{1,3}[ \t\u00A0\u200B\u200C\u200D\uFEFF]*$'
+)
+STRAY_PAGE_NUMBER_BR_RE = re.compile(
+    r'(?i)(<br\s*/?>)[ \t\u00A0\u200B\u200C\u200D\uFEFF]*[\u09E6-\u09EF\d]{1,3}[ \t\u00A0\u200B\u200C\u200D\uFEFF]*(<br\s*/?>)'
+)
 
 
 def classify_line(line):
@@ -233,6 +245,83 @@ def strip_html_tags(value):
     return re.sub(r'<[^>]+>', '', value)
 
 
+def normalize_title_for_match(text):
+    """Normalize headings/titles for loose matching."""
+    normalized = str(text or '')
+    normalized = re.sub(r'<br\s*/?>', ' ', normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r'<[^>]+>', ' ', normalized)
+    normalized = re.sub(r'[-\u2010-\u2015]', ' ', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized).strip().lower()
+    return normalized
+
+
+def remove_leading_heading_block(html):
+    """Remove a leading chapter heading block from page HTML if present."""
+    if not html:
+        return html
+    updated_html = re.sub(
+        r'(<div\s+class=["\']page-text["\'][^>]*>\s*)'
+        r'<div\s+class=["\']heading["\'][^>]*>[\s\S]*?</div>\s*(?:<br\s*/?>\s*)?',
+        r'\1',
+        html,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    # Remove any leftover leading <br> tags after heading removal.
+    updated_html = re.sub(
+        r'(<div\s+class=["\']page-text["\'][^>]*>)\s*(?:<br\s*/?>\s*)+',
+        r'\1',
+        updated_html,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    updated_html = re.sub(
+        r'(<div\s+class=["\']page-text["\'][^>]*>)([\s\S]*?)(</div>)',
+        lambda m: (
+            f"{m.group(1)}"
+            f"{re.sub(r'(?:\\s|<br\\s*/?>)+$', '', re.sub(r'^(?:\\s|<br\\s*/?>)+', '', m.group(2), flags=re.IGNORECASE), flags=re.IGNORECASE)}"
+            f"{m.group(3)}"
+        ),
+        updated_html,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return updated_html.strip()
+
+
+def strip_chapter_headings_from_pages(pages, toc_data):
+    """
+    Hide duplicated leading section/chapter names in page HTML.
+    Keep sectionHeading intact so TOC navigation and XLSX grouping still work.
+    """
+    stripped_count = 0
+    heading_re = re.compile(
+        r'<div\s+class=["\']heading["\'][^>]*>([\s\S]*?)</div>',
+        flags=re.IGNORECASE,
+    )
+
+    for page in pages:
+        section_norm = normalize_title_for_match(page.get('sectionHeading', ''))
+        if not section_norm:
+            continue
+
+        html = str(page.get('html', ''))
+        first_heading = heading_re.search(html)
+        if not first_heading:
+            continue
+
+        first_heading_norm = normalize_title_for_match(first_heading.group(1))
+        if first_heading_norm != section_norm:
+            continue
+
+        updated_html = remove_leading_heading_block(html)
+        if updated_html != html:
+            page['html'] = updated_html
+            stripped_count += 1
+
+    return stripped_count
+
+
 def apply_spelling_patches(pages, patch_config):
     """
     Apply spelling patches after section hierarchy is built.
@@ -334,11 +423,44 @@ def format_content(raw):
     """Convert raw page content into styled HTML."""
     html = raw
 
+    # Strip <text> wrapper tags (content blocks in tagged format)
+    html = re.sub(r'</?text>', '', html, flags=re.IGNORECASE)
+
     # Convert <heading> tags
     def replace_heading(m):
         return f'<div class="heading">{m.group(1).strip()}</div>'
 
     html = re.sub(r'<heading>([\s\S]*?)</heading>', replace_heading, html, flags=re.IGNORECASE)
+
+    # Convert <subheading> tags
+    def replace_subheading(m):
+        return f'<div class="subheading">{m.group(1).strip()}</div>'
+
+    html = re.sub(r'<subheading>([\s\S]*?)</subheading>', replace_subheading, html, flags=re.IGNORECASE)
+
+    # If content uses explicit <ar> tags, skip heuristic Arabic detection.
+    # The viewer JS (rewriteArTags, rewritePronunciationMeaningTags) will
+    # convert <ar>, <pronunciation>, <meaning> to styled divs at render time.
+    has_explicit_ar_tags = bool(re.search(r'<ar\b', html, re.IGNORECASE))
+
+    if has_explicit_ar_tags:
+        # Keep headings/subheadings separated with breaks
+        html = re.sub(
+            r'\s*(<div class="(?:heading|subheading)">[\s\S]*?</div>)\s*',
+            r'<br>\1<br>',
+            html,
+            flags=re.IGNORECASE,
+        )
+        # Clean up excessive whitespace/breaks
+        html = re.sub(r'(<br>\s*){3,}', '<br><br>', html)
+        html = re.sub(r'^(<br>\s*)+', '', html)
+        html = re.sub(r'^\s+', '', html)
+        html = re.sub(r'(?:\s*<br\s*/?>\s*)+$', '', html, flags=re.IGNORECASE)
+        html = re.sub(r'\s+$', '', html)
+        return f'<div class="page-text">{html}</div>'
+
+    # --- Heuristic path for legacy format (no explicit <ar> tags) ---
+
     # Keep headings separate so they never get merged into an arabic-text block.
     html = re.sub(
         r'\s*(<div class="heading">[\s\S]*?</div>)\s*',
@@ -389,6 +511,8 @@ def format_content(raw):
     # Clean up excessive line breaks
     html = re.sub(r'(<br>\s*){3,}', '<br><br>', html)
     html = re.sub(r'^(<br>\s*)+', '', html)
+    html = re.sub(r'(?:\s*<br\s*/?>\s*)+$', '', html, flags=re.IGNORECASE)
+    html = re.sub(r'\s+$', '', html)
 
     return f'<div class="page-text">{html}</div>'
 
@@ -434,6 +558,17 @@ def extract_notes(content):
     return cleaned, notes
 
 
+def remove_stray_page_number_lines(content):
+    """
+    Remove OCR-leaked page numbers that appear as standalone numeric lines
+    inside body text.
+    """
+    cleaned = STRAY_PAGE_NUMBER_LINE_RE.sub('', content)
+    # OCR sometimes leaks page labels between <br> tags instead of clean lines.
+    cleaned = STRAY_PAGE_NUMBER_BR_RE.sub(r'\1\2', cleaned)
+    return re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+
+
 def parse_book(text):
     """Parse the raw text file into section-based pages."""
     # Split by <page_number> tags
@@ -448,6 +583,7 @@ def parse_book(text):
 
         page_num_raw = chunk[:close_idx].strip()
         content = chunk[close_idx + len('</page_number>'):].strip()
+        content = remove_stray_page_number_lines(content)
 
         # Extract page label (Bengali or ASCII digits)
         num_match = re.search(r'[\u09E6-\u09EF\d]+', page_num_raw)
@@ -822,6 +958,7 @@ def parse_single_book(book_name, book_folder):
     # Parse the book
     pages = parse_book(text_data)
     patch_stats = apply_spelling_patches(pages, patch_config)
+    stripped_chapter_headings = strip_chapter_headings_from_pages(pages, toc_data)
 
     # Build JSON output
     json_pages = []
@@ -849,6 +986,8 @@ def parse_single_book(book_name, book_folder):
 
     print(f'  Parsed {len(pages)} pages')
     print(f'  TOC: {len(toc_data)} chapters')
+    if stripped_chapter_headings > 0:
+        print(f'  Chapter headings hidden in page HTML: {stripped_chapter_headings}')
     if patch_stats['replacements'] > 0:
         print(f"  Spelling fixes: {patch_stats['replacements']} replacements ({patch_stats['tags_added']} tags)")
     print(f'  JSON -> output/{book_name}/book-output.json')
@@ -895,6 +1034,7 @@ Examples:
 
         pages = parse_book(text_data)
         patch_stats = apply_spelling_patches(pages, patch_config)
+        stripped_chapter_headings = strip_chapter_headings_from_pages(pages, toc_data)
 
         json_pages = [
             {
@@ -911,6 +1051,8 @@ Examples:
             json.dump(output, f, ensure_ascii=False, indent=2)
 
         print(f'Parsed {len(pages)} pages -> {output_path}')
+        if stripped_chapter_headings > 0:
+            print(f'Chapter headings hidden in page HTML: {stripped_chapter_headings}')
         if patch_stats['replacements'] > 0:
             print(f"Spelling fixes: {patch_stats['replacements']} replacements ({patch_stats['tags_added']} tags)")
 
@@ -963,4 +1105,3 @@ Examples:
 
 if __name__ == '__main__':
     main()
-

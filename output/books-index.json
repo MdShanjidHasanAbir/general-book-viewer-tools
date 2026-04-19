@@ -1,37 +1,12 @@
 [
   {
-    "id": "adorsho_poribar",
-    "name": "Adorsho_Poribar",
-    "path": "output/adorsho_poribar/book-output.json"
+    "id": "hadise bornito-test",
+    "name": "Hadise Bornito Test",
+    "path": "output/hadise bornito-test/book-output.json"
   },
   {
-    "id": "adorsho_porosh",
-    "name": "Adorsho_Porosh",
-    "path": "output/adorsho_porosh/book-output.json"
-  },
-  {
-    "id": "hadis-e-bornito-dua",
-    "name": "Hadis E Bornito Dua",
-    "path": "output/hadis-e-bornito-dua/book-output.json"
-  },
-  {
-    "id": "kitabut_tawhid",
-    "name": "Kitabut_Tawhid",
-    "path": "output/kitabut_tawhid/book-output.json"
-  },
-  {
-    "id": "test",
-    "name": "Test",
-    "path": "output/test/book-output.json"
-  },
-  {
-    "id": "test - Copy",
-    "name": "Test   Copy",
-    "path": "output/test - Copy/book-output.json"
-  },
-  {
-    "id": "test-v2",
-    "name": "Test V2",
-    "path": "output/test-v2/book-output.json"
+    "id": "opodesh-test",
+    "name": "Opodesh Test",
+    "path": "output/opodesh-test/book-output.json"
   }
 ]

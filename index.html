@@ -254,18 +254,6 @@
       z-index: 1;
     }
 
-    .page-number-label {
-      position: absolute;
-      bottom: 20px;
-      left: 0;
-      right: 0;
-      text-align: center;
-      font-size: 0.8rem;
-      color: #8a7e6b;
-      font-weight: 500;
-      z-index: 2;
-    }
-
     /* Slide transitions */
     .page.slide-out-left {
       opacity: 0;
@@ -298,6 +286,14 @@
       line-height: 1.5;
     }
 
+    .page-content .subheading {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--heading-color);
+      margin: 14px 0 8px;
+      line-height: 1.5;
+    }
+
     .page-content .arabic-inline-label {
       direction: ltr;
       text-align: right;
@@ -326,6 +322,29 @@
 
     .page-content .arabic-inline-label + .arabic-text {
       margin-top: 4px;
+    }
+
+    .page-content .pronunciation-box,
+    .page-content .meaning-box {
+      display: block;
+      direction: ltr;
+      text-align: left;
+      line-height: 1.9;
+      margin: 10px 0;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border-left: 3px solid rgba(26, 94, 58, 0.3);
+      background: rgba(26, 94, 58, 0.05);
+    }
+
+    .page-content .pronunciation-box {
+      background: rgba(26, 58, 94, 0.05);
+      border-left-color: rgba(26, 58, 94, 0.35);
+    }
+
+    .page-content .meaning-box {
+      background: rgba(26, 94, 58, 0.06);
+      border-left-color: rgba(26, 94, 58, 0.4);
     }
 
     .page-content .note {
@@ -498,7 +517,6 @@
     <div class="page-wrapper">
       <div class="page" id="page">
         <div class="page-content" id="pageContent"></div>
-        <div class="page-number-label" id="pageNumLabel"></div>
       </div>
     </div>
 
@@ -520,6 +538,7 @@
     let isAnimating = false;
     let booksIndex = [];
     let directBooksIndex = [];
+    let chapterHeadingNorms = new Set();
     const uploadedBooks = new Map();
     let uploadedBookSeq = 0;
 
@@ -567,6 +586,14 @@
         .replace(/\s+/g, ' ')
         .trim()
         .toLowerCase();
+    }
+
+    function rebuildChapterHeadingSet() {
+      chapterHeadingNorms = new Set(
+        tocData
+          .map(ch => normalizeTitleForMatch(ch && ch.chapter ? ch.chapter : ''))
+          .filter(Boolean)
+      );
     }
 
     function closeSidebarOnMobile() {
@@ -713,6 +740,25 @@
       });
     }
 
+    function rewritePronunciationMeaningTags(root) {
+      const taggedEls = root.querySelectorAll('pronunciation, meaning');
+      taggedEls.forEach(el => {
+        const div = document.createElement('div');
+        const baseClass = el.tagName.toLowerCase() === 'pronunciation' ? 'pronunciation-box' : 'meaning-box';
+        div.className = baseClass;
+
+        while (el.firstChild) div.appendChild(el.firstChild);
+        for (const attr of el.attributes) {
+          if (attr.name === 'class') {
+            div.className = (baseClass + ' ' + attr.value).trim();
+          } else {
+            div.setAttribute(attr.name, attr.value);
+          }
+        }
+        el.parentElement.replaceChild(div, el);
+      });
+    }
+
     function fixMergedArabicHeadings(root) {
       const headings = root.querySelectorAll('.arabic-text > .heading');
 
@@ -770,19 +816,68 @@
       });
     }
 
+    function hideDuplicateSectionHeading(root, page) {
+      if (!root || !page) return;
+
+      const sectionHeadingNorm = normalizeTitleForMatch(page.sectionHeading || '');
+      if (!sectionHeadingNorm) return;
+
+      const firstHeading = root.querySelector('.heading');
+      if (!firstHeading) return;
+      const container = firstHeading.parentElement;
+
+      const firstHeadingNorm = normalizeTitleForMatch(firstHeading.textContent || '');
+      if (firstHeadingNorm !== sectionHeadingNorm) return;
+
+      const prev = firstHeading.previousSibling;
+      if (prev && prev.nodeType === Node.ELEMENT_NODE && prev.tagName === 'BR') {
+        prev.remove();
+      }
+      const next = firstHeading.nextSibling;
+      if (next && next.nodeType === Node.ELEMENT_NODE && next.tagName === 'BR') {
+        next.remove();
+      }
+      firstHeading.remove();
+
+      if (!container) return;
+      while (
+        container.firstChild &&
+        container.firstChild.nodeType === Node.TEXT_NODE &&
+        !container.firstChild.textContent.trim()
+      ) {
+        container.removeChild(container.firstChild);
+      }
+      while (
+        container.firstChild &&
+        container.firstChild.nodeType === Node.ELEMENT_NODE &&
+        container.firstChild.tagName === 'BR'
+      ) {
+        container.removeChild(container.firstChild);
+      }
+    }
+
     function renderPage(idx) {
       const pageEl = document.getElementById('page');
       const contentEl = document.getElementById('pageContent');
-      const numEl = document.getElementById('pageNumLabel');
       const indicator = document.getElementById('pageIndicator');
 
       contentEl.innerHTML = pages[idx].html;
       rewriteArTags(contentEl);
+      rewritePronunciationMeaningTags(contentEl);
       fixMergedArabicHeadings(contentEl);
-      numEl.textContent = pages[idx].label;
+      hideDuplicateSectionHeading(contentEl, pages[idx]);
+
+      // Add section name as a heading at the top
+      const sectionName = (pages[idx].sectionHeading || '').trim();
+      if (sectionName) {
+        const sectionEl = document.createElement('div');
+        sectionEl.className = 'heading';
+        sectionEl.textContent = sectionName;
+        contentEl.insertBefore(sectionEl, contentEl.firstChild);
+      }
       pageEl.scrollTop = 0;
 
-      indicator.textContent = `পৃষ্ঠা ${pages[idx].label}  —  ${idx + 1} / ${pages.length}`;
+      indicator.textContent = `${idx + 1} / ${pages.length}`;
 
       document.getElementById('prevBtn').disabled = idx === 0;
       document.getElementById('firstBtn').disabled = idx === 0;
@@ -931,6 +1026,7 @@
       }
       pages = bookData.pages;
       tocData = Array.isArray(bookData.toc) ? bookData.toc : [];
+      rebuildChapterHeadingSet();
 
       renderTOC();
       currentPage = -1; // force first render
