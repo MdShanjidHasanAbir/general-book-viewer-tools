@@ -38,7 +38,9 @@ The .json file can be either:
   2) Object format with hierarchy + spelling patches:
        {
          "hierarchy": [...],
-         "global_patches": {"wrong": "correct", ...},
+         "global_patches": {"wrong": "correct", ...}
+         // OR:
+         // "global_patches": [{"old": "...", "new": "..."}, ...],
          "page_patches": {"67": {"wrong": "correct"}, ...}
        }
 """
@@ -163,19 +165,87 @@ def normalize_toc_data(raw_toc):
 
 
 def as_replacement_map(value):
-    """Normalize replacement map into {old_text: new_text} with string keys/values."""
-    if not isinstance(value, dict):
-        return {}
+    """
+    Normalize replacement definitions into {old_text: new_text}.
 
+    Supported forms:
+      - {"wrong": "correct", ...}
+      - [{"old": "...", "new": "..."}, ...]
+      - [{"from": "...", "to": "..."}, ...]
+      - [{"find": "...", "replace": "..."}, ...]
+      - [{"m": {"wrong": "correct"}}, ...]
+    """
     normalized = {}
-    for old_text, new_text in value.items():
+
+    def add_pair(old_text, new_text):
         if not isinstance(old_text, str):
             old_text = str(old_text)
         if not isinstance(new_text, str):
             new_text = str(new_text)
         if old_text:
             normalized[old_text] = new_text
+
+    if isinstance(value, dict):
+        for old_text, new_text in value.items():
+            add_pair(old_text, new_text)
+        return normalized
+
+    if isinstance(value, list):
+        for entry in value:
+            if isinstance(entry, dict):
+                nested = entry.get('m')
+                if isinstance(nested, dict):
+                    for old_text, new_text in nested.items():
+                        add_pair(old_text, new_text)
+                    continue
+
+                old_text = None
+                new_text = None
+
+                for key in ('old', 'from', 'find', 'wrong', 'source', 'src'):
+                    if key in entry:
+                        old_text = entry.get(key)
+                        break
+                for key in ('new', 'to', 'replace', 'correct', 'target', 'dst'):
+                    if key in entry:
+                        new_text = entry.get(key)
+                        break
+
+                if old_text is not None and new_text is not None:
+                    add_pair(old_text, new_text)
+            elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+                add_pair(entry[0], entry[1])
+
     return normalized
+
+
+def replace_text_exact_or_loose(text, old_text, new_text):
+    """
+    Replace text with exact matching first; if no match and old_text contains
+    whitespace, retry with whitespace-insensitive sentence matching.
+    """
+    text = str(text or '')
+    old_text = str(old_text or '')
+    new_text = str(new_text or '')
+
+    if not text or not old_text:
+        return text, 0
+
+    exact_hits = text.count(old_text)
+    if exact_hits > 0:
+        return text.replace(old_text, new_text), exact_hits
+
+    # Fallback for sentence patches where spacing/newlines differ.
+    if not re.search(r'\s', old_text):
+        return text, 0
+
+    parts = [re.escape(part) for part in re.split(r'\s+', old_text.strip()) if part]
+    if len(parts) < 2:
+        return text, 0
+
+    loose_pattern = re.compile(r'[\s\u00A0\u200B\u200C\u200D\uFEFF]+'.join(parts))
+    updated, loose_hits = loose_pattern.subn(new_text, text)
+    return updated, loose_hits
 
 
 def parse_label_patches_from_entries(entries):
@@ -526,43 +596,52 @@ def apply_spelling_patches(pages, patch_config):
         page_tags = 0
 
         for old_text, new_text in global_patches.items():
-            match_count = html.count(old_text)
-            if match_count <= 0:
+            html, html_hits = replace_text_exact_or_loose(html, old_text, new_text)
+
+            old_plain = strip_html_tags(old_text)
+            new_plain = strip_html_tags(new_text)
+            plain_hits = 0
+            notes_hits = 0
+            heading_hits = 0
+            if old_plain:
+                plain_content, plain_hits = replace_text_exact_or_loose(plain_content, old_plain, new_plain)
+                plain_notes, notes_hits = replace_text_exact_or_loose(plain_notes, old_plain, new_plain)
+                section_heading, heading_hits = replace_text_exact_or_loose(section_heading, old_plain, new_plain)
+
+            any_hits = html_hits + plain_hits + notes_hits + heading_hits
+            if any_hits <= 0:
                 continue
 
-            html = html.replace(old_text, new_text)
+            match_count = html_hits if html_hits > 0 else any_hits
             global_hits[old_text] += match_count
             page_replacements += match_count
 
             if TAG_PATTERN.match(new_text.strip()):
-                page_tags += match_count
-
-            old_plain = strip_html_tags(old_text)
-            new_plain = strip_html_tags(new_text)
-            if old_plain:
-                plain_content = plain_content.replace(old_plain, new_plain)
-                plain_notes = plain_notes.replace(old_plain, new_plain)
-                section_heading = section_heading.replace(old_plain, new_plain)
+                page_tags += html_hits
 
         for old_text, new_text in label_patches.items():
-            match_count = html.count(old_text)
-            if match_count <= 0:
+            html, html_hits = replace_text_exact_or_loose(html, old_text, new_text)
+            old_plain = strip_html_tags(old_text)
+            new_plain = strip_html_tags(new_text)
+            plain_hits = 0
+            notes_hits = 0
+            heading_hits = 0
+            if old_plain:
+                plain_content, plain_hits = replace_text_exact_or_loose(plain_content, old_plain, new_plain)
+                plain_notes, notes_hits = replace_text_exact_or_loose(plain_notes, old_plain, new_plain)
+                section_heading, heading_hits = replace_text_exact_or_loose(section_heading, old_plain, new_plain)
+
+            any_hits = html_hits + plain_hits + notes_hits + heading_hits
+            if any_hits <= 0:
                 preview = old_text[:60] + ('...' if len(old_text) > 60 else '')
                 print(f"  [WARNING] Label patch not found in page '{label}': {preview}")
                 continue
 
-            html = html.replace(old_text, new_text)
+            match_count = html_hits if html_hits > 0 else any_hits
             page_replacements += match_count
 
             if TAG_PATTERN.match(new_text.strip()):
-                page_tags += match_count
-
-            old_plain = strip_html_tags(old_text)
-            new_plain = strip_html_tags(new_text)
-            if old_plain:
-                plain_content = plain_content.replace(old_plain, new_plain)
-                plain_notes = plain_notes.replace(old_plain, new_plain)
-                section_heading = section_heading.replace(old_plain, new_plain)
+                page_tags += html_hits
 
         if page_replacements > 0:
             tag_info = f' ({page_tags} tags added)' if page_tags else ''
