@@ -1,5 +1,10 @@
 [
   {
+    "id": "adorsho poribar-test",
+    "name": "Adorsho Poribar Test",
+    "path": "output/adorsho poribar-test/book-output.json"
+  },
+  {
     "id": "hadise bornito-test",
     "name": "Hadise Bornito Test",
     "path": "output/hadise bornito-test/book-output.json"
