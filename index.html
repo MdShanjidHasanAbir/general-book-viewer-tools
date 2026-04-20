@@ -6,7 +6,7 @@
   <title>Book Viewer</title>
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Amiri:wght@400;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Scheherazade+New:wght@400;700&family=Amiri:wght@400;700&family=Lateef:wght@400;700&family=Aref+Ruqaa:wght@400;700&family=Katibeh&display=swap');
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -179,7 +179,94 @@
     }
     .book-select option { background: #1e3a2a; color: #e8dcc8; }
 
-    .topbar-right { display: flex; align-items: center; gap: 10px; }
+    .topbar-right { display: flex; align-items: center; gap: 10px; position: relative; }
+
+    .settings-wrap { position: relative; }
+
+    .settings-panel {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 8px;
+      background: #1e3a2a;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 10px;
+      padding: 16px 18px;
+      min-width: 280px;
+      z-index: 1000;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+    }
+
+    .settings-panel.open { display: block; }
+
+    .settings-panel h4 {
+      color: #c9a84c;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin: 0 0 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .settings-panel h4:not(:first-child) { margin-top: 14px; }
+
+    .settings-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 8px 0;
+      gap: 10px;
+    }
+
+    .settings-row label {
+      color: #e8dcc8;
+      font-size: 0.8rem;
+      white-space: nowrap;
+    }
+
+    .settings-row select,
+    .settings-row input[type="range"] {
+      flex: 1;
+      max-width: 150px;
+    }
+
+    .settings-row select {
+      padding: 4px 8px;
+      border-radius: 5px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.1);
+      color: #e8dcc8;
+      font-size: 0.78rem;
+      cursor: pointer;
+    }
+
+    .settings-row select option { background: #1e3a2a; color: #e8dcc8; }
+
+    .settings-row input[type="range"] {
+      -webkit-appearance: none;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255,255,255,0.2);
+      outline: none;
+    }
+
+    .settings-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--cover-accent);
+      cursor: pointer;
+    }
+
+    .settings-row .size-value {
+      color: rgba(232,220,200,0.6);
+      font-size: 0.72rem;
+      min-width: 32px;
+      text-align: right;
+    }
 
     .page-jump {
       display: flex;
@@ -307,44 +394,37 @@
     .page-content .arabic-text,
     .page-content ar {
       display: block;
-      font-family: 'Amiri', 'Noto Naskh Arabic', serif;
+      font-family: 'Scheherazade New', 'Noto Naskh Arabic', serif;
       direction: rtl;
-      text-align: right;
-      font-size: 1.25rem;
+      text-align: justify;
+      font-size: 1.35rem;
+      font-weight: 700;
       line-height: 2.2;
-      color: var(--arabic-color);
+      color: var(--text-color);
       margin: 12px 0;
-      padding: 10px 15px;
-      background: rgba(26, 58, 94, 0.04);
-      border-radius: 6px;
-      border-right: 3px solid rgba(26, 58, 94, 0.2);
     }
 
     .page-content .arabic-inline-label + .arabic-text {
       margin-top: 4px;
     }
 
-    .page-content .pronunciation-box,
-    .page-content .meaning-box {
+    .page-content .pronunciation-box {
       display: block;
       direction: ltr;
       text-align: left;
+      font-style: italic;
       line-height: 1.9;
-      margin: 10px 0;
-      padding: 10px 14px;
-      border-radius: 8px;
-      border-left: 3px solid rgba(26, 94, 58, 0.3);
-      background: rgba(26, 94, 58, 0.05);
-    }
-
-    .page-content .pronunciation-box {
-      background: rgba(26, 58, 94, 0.05);
-      border-left-color: rgba(26, 58, 94, 0.35);
+      margin: 6px 0 10px;
+      color: var(--text-color);
     }
 
     .page-content .meaning-box {
-      background: rgba(26, 94, 58, 0.06);
-      border-left-color: rgba(26, 94, 58, 0.4);
+      display: block;
+      direction: ltr;
+      text-align: justify;
+      line-height: 1.9;
+      margin: 6px 0 10px;
+      opacity: 0.65;
     }
 
     .page-content .note {
@@ -513,6 +593,88 @@
         <button class="btn" id="darkToggle" title="Toggle dark mode">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
+        <div class="settings-wrap">
+          <button class="btn" id="settingsToggle" title="Font settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+          <div class="settings-panel" id="settingsPanel">
+            <h4>Bengali</h4>
+            <div class="settings-row">
+              <label>Size</label>
+              <input type="range" id="banglaSizeSlider" min="0.75" max="1.4" step="0.05" value="0.93">
+              <span class="size-value" id="banglaSizeValue">0.93</span>
+            </div>
+            <div class="settings-row">
+              <label>Line Height</label>
+              <input type="range" id="banglaLineHeightSlider" min="1.4" max="2.6" step="0.1" value="1.85">
+              <span class="size-value" id="banglaLineHeightValue">1.85</span>
+            </div>
+            <div class="settings-row">
+              <label>Para Gap</label>
+              <input type="range" id="paraGapSlider" min="0" max="24" step="2" value="8">
+              <span class="size-value" id="paraGapValue">8px</span>
+            </div>
+
+            <h4>Arabic</h4>
+            <div class="settings-row">
+              <label>Font</label>
+              <select id="arabicFontSelect">
+                <option value="'Scheherazade New'">Scheherazade New</option>
+                <option value="'Amiri'">Amiri</option>
+                <option value="'Noto Naskh Arabic'">Noto Naskh Arabic</option>
+                <option value="'Lateef'">Lateef</option>
+                <option value="'Aref Ruqaa'">Aref Ruqaa</option>
+                <option value="'Katibeh'">Katibeh</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label>Size</label>
+              <input type="range" id="arabicSizeSlider" min="1" max="2.2" step="0.05" value="1.35">
+              <span class="size-value" id="arabicSizeValue">1.35</span>
+            </div>
+            <div class="settings-row">
+              <label>Weight</label>
+              <select id="arabicWeightSelect">
+                <option value="700">Bold</option>
+                <option value="400">Normal</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label>Align</label>
+              <select id="arabicAlignSelect">
+                <option value="justify">Justify</option>
+                <option value="right">Right</option>
+                <option value="center">Center</option>
+              </select>
+            </div>
+
+            <h4>Pronunciation</h4>
+            <div class="settings-row">
+              <label>Size</label>
+              <input type="range" id="pronSizeSlider" min="0.7" max="1.5" step="0.05" value="0.93">
+              <span class="size-value" id="pronSizeValue">0.93</span>
+            </div>
+            <div class="settings-row">
+              <label>Style</label>
+              <select id="pronStyleSelect">
+                <option value="italic">Italic</option>
+                <option value="normal">Normal</option>
+              </select>
+            </div>
+
+            <h4>Meaning</h4>
+            <div class="settings-row">
+              <label>Size</label>
+              <input type="range" id="meaningSizeSlider" min="0.7" max="1.5" step="0.05" value="0.93">
+              <span class="size-value" id="meaningSizeValue">0.93</span>
+            </div>
+            <div class="settings-row">
+              <label>Opacity</label>
+              <input type="range" id="meaningOpacitySlider" min="0.3" max="1" step="0.05" value="0.65">
+              <span class="size-value" id="meaningOpacityValue">0.65</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -870,6 +1032,8 @@
       fixMergedArabicHeadings(contentEl);
       hideDuplicateSectionHeading(contentEl, pages[idx]);
 
+      applyFontSettings(contentEl);
+
       // Add section name as a heading at the top
       const sectionName = (pages[idx].sectionHeading || '').trim();
       if (sectionName) {
@@ -949,6 +1113,98 @@
 
     document.getElementById('darkToggle').addEventListener('click', () => {
       document.body.classList.toggle('dark-mode');
+    });
+
+    // ── Font Settings ──
+    function applyFontSettings(root) {
+      const s = key => localStorage.getItem(key);
+      const page = document.getElementById('page');
+      if (page) {
+        if (s('banglaSize')) page.style.fontSize = s('banglaSize') + "rem";
+        if (s('banglaLineHeight')) page.style.lineHeight = s('banglaLineHeight');
+      }
+      if (s('paraGap')) {
+        root.querySelectorAll('p').forEach(el => {
+          el.style.marginBottom = s('paraGap') + "px";
+        });
+      }
+      root.querySelectorAll('.arabic-text').forEach(el => {
+        if (s('arabicFont')) el.style.fontFamily = s('arabicFont') + ", serif";
+        if (s('arabicSize')) el.style.fontSize = s('arabicSize') + "rem";
+        if (s('arabicWeight')) el.style.fontWeight = s('arabicWeight');
+        if (s('arabicAlign')) el.style.textAlign = s('arabicAlign');
+      });
+      root.querySelectorAll('.pronunciation-box').forEach(el => {
+        if (s('pronSize')) el.style.fontSize = s('pronSize') + "rem";
+        if (s('pronStyle')) el.style.fontStyle = s('pronStyle');
+      });
+      root.querySelectorAll('.meaning-box').forEach(el => {
+        if (s('meaningSize')) el.style.fontSize = s('meaningSize') + "rem";
+        if (s('meaningOpacity')) el.style.opacity = s('meaningOpacity');
+      });
+    }
+
+    function bindSetting(id, key, apply) {
+      const el = document.getElementById(id);
+      const saved = localStorage.getItem(key);
+      if (saved) el.value = saved;
+      el.addEventListener('input', () => {
+        localStorage.setItem(key, el.value);
+        apply(el.value);
+        // Update size-value display if it exists
+        const display = document.getElementById(id.replace('Slider', 'Value').replace('Select', 'Value'));
+        if (display && display.classList.contains('size-value')) display.textContent = el.value;
+      });
+    }
+
+    function reapplyAll() {
+      const contentEl = document.getElementById('pageContent');
+      if (contentEl) applyFontSettings(contentEl);
+    }
+
+    bindSetting('banglaSizeSlider', 'banglaSize', v => {
+      document.getElementById('banglaSizeValue').textContent = v;
+      reapplyAll();
+    });
+    bindSetting('banglaLineHeightSlider', 'banglaLineHeight', v => {
+      document.getElementById('banglaLineHeightValue').textContent = v;
+      reapplyAll();
+    });
+    bindSetting('paraGapSlider', 'paraGap', v => {
+      document.getElementById('paraGapValue').textContent = v + 'px';
+      reapplyAll();
+    });
+    bindSetting('arabicFontSelect', 'arabicFont', reapplyAll);
+    bindSetting('arabicSizeSlider', 'arabicSize', v => {
+      document.getElementById('arabicSizeValue').textContent = v;
+      reapplyAll();
+    });
+    bindSetting('arabicWeightSelect', 'arabicWeight', reapplyAll);
+    bindSetting('arabicAlignSelect', 'arabicAlign', reapplyAll);
+    bindSetting('pronSizeSlider', 'pronSize', v => {
+      document.getElementById('pronSizeValue').textContent = v;
+      reapplyAll();
+    });
+    bindSetting('pronStyleSelect', 'pronStyle', reapplyAll);
+    bindSetting('meaningSizeSlider', 'meaningSize', v => {
+      document.getElementById('meaningSizeValue').textContent = v;
+      reapplyAll();
+    });
+    bindSetting('meaningOpacitySlider', 'meaningOpacity', v => {
+      document.getElementById('meaningOpacityValue').textContent = v;
+      reapplyAll();
+    });
+
+    // Settings panel toggle
+    document.getElementById('settingsToggle').addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.getElementById('settingsPanel').classList.toggle('open');
+    });
+    document.addEventListener('click', (e) => {
+      const panel = document.getElementById('settingsPanel');
+      if (panel.classList.contains('open') && !panel.contains(e.target)) {
+        panel.classList.remove('open');
+      }
     });
 
     document.getElementById('goToPage').addEventListener('click', () => {

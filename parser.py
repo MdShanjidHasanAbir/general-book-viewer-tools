@@ -680,29 +680,37 @@ def merge_split_tags(html):
     This function detects cases where the first tag ends mid-sentence
     (no terminal punctuation) and merges them into one tag.
     """
-    def _merge_boundary(match, sentence_end_re):
-        before = match.group(1)
-        after = match.group(2)
-        plain = re.sub(r'<[^>]+>', '', before).rstrip()
-        if not plain:
-            return match.group(0)
-        if sentence_end_re.search(plain):
-            return match.group(0)  # complete sentence, keep separate
-        # Mid-sentence: merge by removing the boundary tags
-        return before.rstrip() + ' ' + after.lstrip()
+    def _merge_tag_boundaries(text, tag, sentence_end_re):
+        """Find each </tag>\\s*<tag> boundary and merge if the preceding text is mid-sentence."""
+        boundary_re = re.compile(
+            r'</' + tag + r'>\s*<' + tag + r'>',
+            re.IGNORECASE,
+        )
+        while True:
+            merged = False
+            for m in boundary_re.finditer(text):
+                # Extract the content between the last opening tag and this boundary
+                preceding = text[:m.start()]
+                open_pos = preceding.lower().rfind('<' + tag.lower() + '>')
+                if open_pos == -1:
+                    continue
+                content_before = preceding[open_pos + len(tag) + 2:]
+                plain = re.sub(r'<[^>]+>', '', content_before).rstrip()
+                if not plain or sentence_end_re.search(plain):
+                    continue  # complete sentence or empty, skip
+                # Mid-sentence: remove the boundary
+                text = text[:m.start()] + ' ' + text[m.end():]
+                merged = True
+                break  # restart since positions shifted
+            if not merged:
+                break
+        return text
 
-    # Merge split <p> tags
-    html = re.sub(
-        r'(<p>[\s\S]*?)</p>\s*<p>([\s\S]*?</p>)',
-        lambda m: _merge_boundary(m, BENGALI_SENTENCE_END_RE),
-        html, flags=re.IGNORECASE,
-    )
-    # Merge split <ar> tags
-    html = re.sub(
-        r'(<ar>[\s\S]*?)</ar>\s*<ar>([\s\S]*?</ar>)',
-        lambda m: _merge_boundary(m, ARABIC_SENTENCE_END_RE),
-        html, flags=re.IGNORECASE,
-    )
+    # Merge split tags across page boundaries
+    html = _merge_tag_boundaries(html, 'p', BENGALI_SENTENCE_END_RE)
+    html = _merge_tag_boundaries(html, 'ar', ARABIC_SENTENCE_END_RE)
+    html = _merge_tag_boundaries(html, 'meaning', BENGALI_SENTENCE_END_RE)
+    html = _merge_tag_boundaries(html, 'pronunciation', BENGALI_SENTENCE_END_RE)
     return html
 
 

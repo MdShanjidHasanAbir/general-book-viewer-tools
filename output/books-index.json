@@ -5,6 +5,11 @@
     "path": "output/adorsho poribar-test/book-output.json"
   },
   {
+    "id": "asbabun nujul",
+    "name": "Asbabun Nujul",
+    "path": "output/asbabun nujul/book-output.json"
+  },
+  {
     "id": "hadise bornito-test",
     "name": "Hadise Bornito Test",
     "path": "output/hadise bornito-test/book-output.json"
