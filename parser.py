@@ -803,12 +803,29 @@ def remove_first_heading_tag(content):
     return re.sub(r'<heading>[\s\S]*?</heading>\s*', '', content, count=1, flags=re.IGNORECASE)
 
 
+def normalize_note_html_to_lines(note_html):
+    """Normalize a <note> block into plain, single-line note entries."""
+    text = note_html or ''
+    # Keep one logical line per note item while removing markup-specific spacing.
+    text = re.sub(r'(?i)</p>\s*<p[^>]*>', '\n', text)
+    text = re.sub(r'(?i)<br\s*/?>', '\n', text)
+    text = re.sub(r'(?i)</?p[^>]*>', '', text)
+    text = unescape(re.sub(r'<[^>]+>', '', text))
+
+    lines = []
+    for raw_line in re.split(r'[\r\n]+', text):
+        line = re.sub(r'\s+', ' ', raw_line).strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
 def extract_notes(content):
     """Extract <note> blocks from content and return cleaned text and note list."""
     notes = []
 
     def collect_note(m):
-        notes.append(m.group(1).strip())
+        notes.extend(normalize_note_html_to_lines(m.group(1)))
         return ''
 
     cleaned = re.sub(r'<note>([\s\S]*?)</note>', collect_note, content, flags=re.IGNORECASE)
@@ -1160,7 +1177,7 @@ def generate_xlsx(toc_data, pages, output_path):
             if section_pages:
                 extracted_parts = [extract_tagged_from_html(page.get('html', '')) for page in section_pages]
                 content = '\n\n'.join(part['content'] for part in extracted_parts if part['content'])
-                notes = '\n\n'.join(part['notes'] for part in extracted_parts if part['notes'])
+                notes = '\n'.join(part['notes'] for part in extracted_parts if part['notes'])
 
             add_styled_export_row({
                 'chapter_id': ch_idx + 1,

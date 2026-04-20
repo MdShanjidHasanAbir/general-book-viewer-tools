@@ -357,6 +357,9 @@
       border-left: 3px solid var(--cover-accent);
       line-height: 1.7;
     }
+    .page-content .note p {
+      margin: 0;
+    }
 
     .page-content .section-footnotes {
       margin-top: 24px;
@@ -1369,7 +1372,7 @@
           if (sectionPages.length) {
             const extractedParts = sectionPages.map(pg => extractTaggedFromHtml(pg.html || ''));
             content = extractedParts.map(part => part.content).filter(Boolean).join('\n\n');
-            notes = extractedParts.map(part => part.notes).filter(Boolean).join('\n\n');
+            notes = extractedParts.map(part => part.notes).filter(Boolean).join('\n');
           }
 
           addStyledExportRow({
