@@ -75,6 +75,10 @@ STRAY_PAGE_NUMBER_LINE_RE = re.compile(
 STRAY_PAGE_NUMBER_BR_RE = re.compile(
     r'(?i)(<br\s*/?>)[ \t\u00A0\u200B\u200C\u200D\uFEFF]*[\u09E6-\u09EF\d]{1,3}[ \t\u00A0\u200B\u200C\u200D\uFEFF]*(<br\s*/?>)'
 )
+SUBHEADING_DIV_RE = re.compile(
+    r'<div\s+class=["\']subheading["\'][^>]*>([\s\S]*?)</div>',
+    flags=re.IGNORECASE,
+)
 
 
 def classify_line(line):
@@ -255,13 +259,152 @@ def normalize_title_for_match(text):
     return normalized
 
 
-def remove_leading_heading_block(html):
-    """Remove a leading chapter heading block from page HTML if present."""
+def extract_first_subheading_text(html):
+    """Extract the first rendered subheading text from page HTML."""
+    if not html:
+        return ''
+    match = SUBHEADING_DIV_RE.search(str(html))
+    if not match:
+        return ''
+    text = unescape(strip_html_tags(match.group(1)))
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def align_pages_to_toc_hierarchy(pages, toc_data):
+    """
+    Align page sectionHeading values with TOC hierarchy.
+    Priority:
+      1) Match current heading against chapter/section names
+      2) If heading is a chapter, try first subheading as section
+      3) If no heading match, try first subheading as section
+    """
+    if not isinstance(pages, list) or not isinstance(toc_data, list):
+        return 0
+
+    chapter_meta = []
+    section_candidates = {}
+
+    for chapter_idx, chapter in enumerate(toc_data):
+        if not isinstance(chapter, dict):
+            continue
+        chapter_name = str(chapter.get('chapter', '')).strip()
+        chapter_norm = normalize_title_for_match(chapter_name)
+        raw_sections = chapter.get('sections', [])
+        if isinstance(raw_sections, list):
+            sections = [str(sec or '').strip() for sec in raw_sections]
+            sections = [sec for sec in sections if sec]
+        else:
+            sections = []
+
+        section_norm_map = {}
+        for sec_name in sections:
+            sec_norm = normalize_title_for_match(sec_name)
+            if not sec_norm:
+                continue
+            if sec_norm not in section_norm_map:
+                section_norm_map[sec_norm] = sec_name
+            section_candidates.setdefault(sec_norm, []).append((chapter_idx, sec_name))
+
+        chapter_meta.append({
+            'index': chapter_idx,
+            'name': chapter_name,
+            'norm': chapter_norm,
+            'sections': sections,
+            'section_norm_map': section_norm_map,
+        })
+
+    if not chapter_meta:
+        return 0
+
+    def find_chapter_index(title_norm):
+        if not title_norm:
+            return None
+        exact = [meta['index'] for meta in chapter_meta if meta['norm'] == title_norm]
+        if len(exact) == 1:
+            return exact[0]
+
+        loose = []
+        for meta in chapter_meta:
+            norm = meta['norm']
+            if not norm:
+                continue
+            if title_norm in norm or norm in title_norm:
+                loose.append(meta['index'])
+        if len(loose) == 1:
+            return loose[0]
+        return None
+
+    def find_section_match(title_norm, preferred_chapter_idx):
+        if not title_norm:
+            return None, None
+
+        # Prefer section matches in the active chapter.
+        if preferred_chapter_idx is not None:
+            for meta in chapter_meta:
+                if meta['index'] != preferred_chapter_idx:
+                    continue
+                if title_norm in meta['section_norm_map']:
+                    return preferred_chapter_idx, meta['section_norm_map'][title_norm]
+                break
+
+        # Exact global match.
+        if title_norm in section_candidates and section_candidates[title_norm]:
+            return section_candidates[title_norm][0]
+
+        # Loose global match if unambiguous.
+        loose = []
+        for sec_norm, matches in section_candidates.items():
+            if title_norm in sec_norm or sec_norm in title_norm:
+                loose.extend(matches)
+        if len(loose) == 1:
+            return loose[0]
+
+        return None, None
+
+    aligned_count = 0
+    current_chapter_idx = chapter_meta[0]['index']
+
+    for page in pages:
+        existing_heading = str(page.get('sectionHeading', '') or '').strip()
+        existing_norm = normalize_title_for_match(existing_heading)
+        first_subheading = extract_first_subheading_text(page.get('html', ''))
+        first_subheading_norm = normalize_title_for_match(first_subheading)
+
+        resolved_heading = existing_heading
+
+        chapter_match_idx = find_chapter_index(existing_norm)
+        if chapter_match_idx is not None:
+            current_chapter_idx = chapter_match_idx
+            sec_ch_idx, sec_name = find_section_match(first_subheading_norm, current_chapter_idx)
+            if sec_name:
+                current_chapter_idx = sec_ch_idx
+                resolved_heading = sec_name
+        else:
+            sec_ch_idx, sec_name = find_section_match(existing_norm, current_chapter_idx)
+            if sec_name:
+                current_chapter_idx = sec_ch_idx
+                resolved_heading = sec_name
+            else:
+                sec_ch_idx, sec_name = find_section_match(first_subheading_norm, current_chapter_idx)
+                if sec_name:
+                    current_chapter_idx = sec_ch_idx
+                    resolved_heading = sec_name
+
+        if resolved_heading and resolved_heading != existing_heading:
+            page['sectionHeading'] = resolved_heading
+            aligned_count += 1
+
+    return aligned_count
+
+
+def remove_leading_title_block(html, title_class):
+    """Remove a leading heading/subheading block from page HTML if present."""
     if not html:
         return html
+    escaped_class = re.escape(str(title_class))
     updated_html = re.sub(
         r'(<div\s+class=["\']page-text["\'][^>]*>\s*)'
-        r'<div\s+class=["\']heading["\'][^>]*>[\s\S]*?</div>\s*(?:<br\s*/?>\s*)?',
+        rf'<div\s+class=["\']{escaped_class}["\'][^>]*>[\s\S]*?</div>\s*(?:<br\s*/?>\s*)?',
         r'\1',
         html,
         count=1,
@@ -295,10 +438,18 @@ def strip_chapter_headings_from_pages(pages, toc_data):
     Keep sectionHeading intact so TOC navigation and XLSX grouping still work.
     """
     stripped_count = 0
-    heading_re = re.compile(
-        r'<div\s+class=["\']heading["\'][^>]*>([\s\S]*?)</div>',
+    title_re = re.compile(
+        r'<div\s+class=["\'](heading|subheading)["\'][^>]*>([\s\S]*?)</div>',
         flags=re.IGNORECASE,
     )
+    chapter_heading_norms = set()
+    if isinstance(toc_data, list):
+        for chapter in toc_data:
+            if not isinstance(chapter, dict):
+                continue
+            chapter_norm = normalize_title_for_match(chapter.get('chapter', ''))
+            if chapter_norm:
+                chapter_heading_norms.add(chapter_norm)
 
     for page in pages:
         section_norm = normalize_title_for_match(page.get('sectionHeading', ''))
@@ -306,17 +457,33 @@ def strip_chapter_headings_from_pages(pages, toc_data):
             continue
 
         html = str(page.get('html', ''))
-        first_heading = heading_re.search(html)
-        if not first_heading:
-            continue
+        updated_any = False
 
-        first_heading_norm = normalize_title_for_match(first_heading.group(1))
-        if first_heading_norm != section_norm:
-            continue
+        while True:
+            first_title = title_re.search(html)
+            if not first_title:
+                break
 
-        updated_html = remove_leading_heading_block(html)
-        if updated_html != html:
-            page['html'] = updated_html
+            first_title_class = (first_title.group(1) or '').lower()
+            if first_title_class not in ('heading', 'subheading'):
+                break
+
+            first_title_norm = normalize_title_for_match(first_title.group(2))
+            should_strip = (
+                first_title_norm == section_norm
+                or (first_title_class == 'heading' and first_title_norm in chapter_heading_norms)
+            )
+            if not should_strip:
+                break
+
+            updated_html = remove_leading_title_block(html, first_title_class)
+            if updated_html == html:
+                break
+            html = updated_html
+            updated_any = True
+
+        if updated_any:
+            page['html'] = html
             stripped_count += 1
 
     return stripped_count
@@ -546,6 +713,17 @@ def split_page_content_by_heading(content):
     return chunks
 
 
+def extract_first_heading_text(content):
+    """Extract first <heading> text from a chunk."""
+    match = re.search(r'<heading>([\s\S]*?)</heading>', content, flags=re.IGNORECASE)
+    return match.group(1).strip() if match else ''
+
+
+def remove_first_heading_tag(content):
+    """Remove first <heading> tag from a chunk."""
+    return re.sub(r'<heading>[\s\S]*?</heading>\s*', '', content, count=1, flags=re.IGNORECASE)
+
+
 def extract_notes(content):
     """Extract <note> blocks from content and return cleaned text and note list."""
     notes = []
@@ -605,10 +783,37 @@ def parse_book(text):
         chunks = split_page_content_by_heading(page['content'])
         for chunk in chunks:
             chunk_content, chunk_notes = extract_notes(chunk['content'])
+            chunk_heading_norm = ''
+            if chunk['hasHeading']:
+                chunk_heading_norm = normalize_title_for_match(
+                    extract_first_heading_text(chunk_content)
+                )
 
-            if chunk['hasHeading'] or current_section is None:
-                current_section = {'parts': [], 'notes': [], 'labels': []}
+            start_new_section = current_section is None
+            if chunk['hasHeading'] and current_section is not None:
+                current_heading_norm = current_section.get('headingNorm', '')
+                is_same_heading = bool(
+                    chunk_heading_norm and current_heading_norm and
+                    chunk_heading_norm == current_heading_norm
+                )
+                if is_same_heading:
+                    # Same section heading repeated on next source page:
+                    # keep merging into current section and drop duplicate heading block.
+                    chunk_content = remove_first_heading_tag(chunk_content)
+                    start_new_section = False
+                else:
+                    start_new_section = True
+
+            if start_new_section:
+                current_section = {
+                    'parts': [],
+                    'notes': [],
+                    'labels': [],
+                    'headingNorm': chunk_heading_norm,
+                }
                 sections.append(current_section)
+            elif chunk_heading_norm and not current_section.get('headingNorm'):
+                current_section['headingNorm'] = chunk_heading_norm
 
             if chunk_content.strip():
                 current_section['parts'].append(chunk_content)
@@ -958,6 +1163,7 @@ def parse_single_book(book_name, book_folder):
     # Parse the book
     pages = parse_book(text_data)
     patch_stats = apply_spelling_patches(pages, patch_config)
+    aligned_sections = align_pages_to_toc_hierarchy(pages, toc_data)
     stripped_chapter_headings = strip_chapter_headings_from_pages(pages, toc_data)
 
     # Build JSON output
@@ -987,7 +1193,9 @@ def parse_single_book(book_name, book_folder):
     print(f'  Parsed {len(pages)} pages')
     print(f'  TOC: {len(toc_data)} chapters')
     if stripped_chapter_headings > 0:
-        print(f'  Chapter headings hidden in page HTML: {stripped_chapter_headings}')
+        print(f'  Leading matched heading/subheading hidden in page HTML: {stripped_chapter_headings}')
+    if aligned_sections > 0:
+        print(f'  Section headings aligned to TOC hierarchy: {aligned_sections}')
     if patch_stats['replacements'] > 0:
         print(f"  Spelling fixes: {patch_stats['replacements']} replacements ({patch_stats['tags_added']} tags)")
     print(f'  JSON -> output/{book_name}/book-output.json')
@@ -1034,6 +1242,7 @@ Examples:
 
         pages = parse_book(text_data)
         patch_stats = apply_spelling_patches(pages, patch_config)
+        aligned_sections = align_pages_to_toc_hierarchy(pages, toc_data)
         stripped_chapter_headings = strip_chapter_headings_from_pages(pages, toc_data)
 
         json_pages = [
@@ -1052,7 +1261,9 @@ Examples:
 
         print(f'Parsed {len(pages)} pages -> {output_path}')
         if stripped_chapter_headings > 0:
-            print(f'Chapter headings hidden in page HTML: {stripped_chapter_headings}')
+            print(f'Leading matched heading/subheading hidden in page HTML: {stripped_chapter_headings}')
+        if aligned_sections > 0:
+            print(f'Section headings aligned to TOC hierarchy: {aligned_sections}')
         if patch_stats['replacements'] > 0:
             print(f"Spelling fixes: {patch_stats['replacements']} replacements ({patch_stats['tags_added']} tags)")
 
