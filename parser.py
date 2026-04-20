@@ -82,6 +82,12 @@ SUBHEADING_DIV_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
+# Sentence-ending punctuation patterns for detecting split paragraphs across pages.
+# Bengali: danda (।), period, question/excl, closing brackets/quotes
+BENGALI_SENTENCE_END_RE = re.compile(r'[\u0964.?!\]\)\u2019\'\"]\s*$')
+# Arabic: period, Arabic full stop (۔), Arabic question mark (؟), right guillemet (»)
+ARABIC_SENTENCE_END_RE = re.compile(r'[\.\u06D4\u061F!\u00BB]\s*$')
+
 
 def classify_line(line):
     """Classify a line as arabic, empty, or other based on character ratios."""
@@ -665,12 +671,50 @@ def apply_spelling_patches(pages, patch_config):
     }
 
 
+def merge_split_tags(html):
+    """Merge <p> and <ar> tags that were split across page boundaries.
+
+    When a paragraph is split across two physical pages, after joining
+    and stripping <text> tags we get adjacent closing/opening tags:
+        ...sentence fragment</p>  <p>continuation...
+    This function detects cases where the first tag ends mid-sentence
+    (no terminal punctuation) and merges them into one tag.
+    """
+    def _merge_boundary(match, sentence_end_re):
+        before = match.group(1)
+        after = match.group(2)
+        plain = re.sub(r'<[^>]+>', '', before).rstrip()
+        if not plain:
+            return match.group(0)
+        if sentence_end_re.search(plain):
+            return match.group(0)  # complete sentence, keep separate
+        # Mid-sentence: merge by removing the boundary tags
+        return before.rstrip() + ' ' + after.lstrip()
+
+    # Merge split <p> tags
+    html = re.sub(
+        r'(<p>[\s\S]*?)</p>\s*<p>([\s\S]*?</p>)',
+        lambda m: _merge_boundary(m, BENGALI_SENTENCE_END_RE),
+        html, flags=re.IGNORECASE,
+    )
+    # Merge split <ar> tags
+    html = re.sub(
+        r'(<ar>[\s\S]*?)</ar>\s*<ar>([\s\S]*?</ar>)',
+        lambda m: _merge_boundary(m, ARABIC_SENTENCE_END_RE),
+        html, flags=re.IGNORECASE,
+    )
+    return html
+
+
 def format_content(raw):
     """Convert raw page content into styled HTML."""
     html = raw
 
     # Strip <text> wrapper tags (content blocks in tagged format)
     html = re.sub(r'</?text>', '', html, flags=re.IGNORECASE)
+
+    # Merge paragraphs/Arabic text split across page boundaries
+    html = merge_split_tags(html)
 
     # Convert <heading> tags
     def replace_heading(m):
@@ -947,6 +991,7 @@ def parse_book(text):
 
         # Extract plain text content (strip heading and HTML tags)
         raw_content = '\n'.join(raw_texts)
+        raw_content = merge_split_tags(raw_content)
         raw_content_no_heading = re.sub(r'<heading>[\s\S]*?</heading>', '', raw_content, flags=re.IGNORECASE)
         plain_content = re.sub(r'<[^>]+>', '', raw_content_no_heading).strip()
         plain_content = re.sub(r'\n{3,}', '\n\n', plain_content)
