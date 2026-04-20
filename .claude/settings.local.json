@@ -8,7 +8,8 @@
       "Bash(mv hadis-e-bornito-dua.txt books/hadis-e-bornito-dua/)",
       "Bash(mv hadis-e-bornito-dua.json books/hadis-e-bornito-dua/)",
       "Bash(python parser.py \"hadise bornito-test\")",
-      "Bash(ls -d \"d:/ABIR WORKS/DATABASE/TOOLS & SCRIPTS/GENERAL BOOK VIEWER TOOLS/output/\"*/)"
+      "Bash(ls -d \"d:/ABIR WORKS/DATABASE/TOOLS & SCRIPTS/GENERAL BOOK VIEWER TOOLS/output/\"*/)",
+      "Bash(python parser.py \"adorsho poribar-test\")"
     ]
   }
 }

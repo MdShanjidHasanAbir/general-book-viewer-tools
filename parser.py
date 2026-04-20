@@ -1063,13 +1063,9 @@ def discover_books():
 
 
 def generate_xlsx(toc_data, pages, output_path):
-    """Generate an xlsx file that mirrors the viewer's XLSX download output."""
+    """Generate an xlsx file with 3 sheets: chapter, section, content."""
     wb = Workbook()
-    ws = wb.active
-    ws.title = 'Book Content'
 
-    # Header row
-    headers = ['chapter_id', 'chapter_name', 'section_id', 'section_name', 'content', 'notes']
     header_fill = PatternFill(start_color='FF4472C4', end_color='FF4472C4', fill_type='solid')
     header_font_white = Font(bold=True, size=12, color='FFFFFFFF')
     thin_border = Border(
@@ -1079,12 +1075,14 @@ def generate_xlsx(toc_data, pages, output_path):
         bottom=Side(style='thin'),
     )
 
-    for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = header_font_white
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal='center', vertical='center')
-        cell.border = thin_border
+    def write_header(ws, headers):
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.font = header_font_white
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = thin_border
+        ws.freeze_panes = 'A2'
 
     def normalize_title(value):
         return re.sub(r'\s+', ' ', str(value or '')).strip()
@@ -1151,22 +1149,7 @@ def generate_xlsx(toc_data, pages, output_path):
     safe_toc = [ch for ch in toc_data if isinstance(ch, dict)] if isinstance(toc_data, list) else []
     safe_pages = [pg for pg in pages if isinstance(pg, dict)] if isinstance(pages, list) else []
 
-    def add_styled_export_row(row_data):
-        ws.append([
-            row_data.get('chapter_id', ''),
-            row_data.get('chapter_name', ''),
-            row_data.get('section_id', ''),
-            row_data.get('section_name', ''),
-            row_data.get('content', ''),
-            row_data.get('notes', ''),
-        ])
-        row_number = ws.max_row
-        for col_number in range(1, 7):
-            cell = ws.cell(row=row_number, column=col_number)
-            cell.border = thin_border
-            if col_number in (5, 6):
-                cell.alignment = Alignment(wrap_text=True, vertical='top')
-
+    # Build chapter metadata
     chapter_meta = []
     for ch_idx, chapter in enumerate(safe_toc):
         chapter_name = str(chapter.get('chapter', '')).strip()
@@ -1205,7 +1188,45 @@ def generate_xlsx(toc_data, pages, output_path):
         if 0 <= current_chapter_idx < len(chapter_pages):
             chapter_pages[current_chapter_idx].append(page)
 
-    row_count = 0
+    # --- Sheet 1: chapter ---
+    ws_chapter = wb.active
+    ws_chapter.title = 'chapter'
+    write_header(ws_chapter, ['chapter_id', 'chapter_name'])
+
+    for ch_idx, meta in enumerate(chapter_meta):
+        row = ch_idx + 2
+        ws_chapter.cell(row=row, column=1, value=ch_idx + 1).border = thin_border
+        ws_chapter.cell(row=row, column=2, value=meta['chapter_name']).border = thin_border
+
+    ws_chapter.column_dimensions['A'].width = 12
+    ws_chapter.column_dimensions['B'].width = 40
+
+    # --- Sheet 2: section ---
+    ws_section = wb.create_sheet('section')
+    write_header(ws_section, ['section_id', 'section_name', 'chapter_id'])
+
+    global_section_id = 0
+    # Track section_id per (chapter, section) for the content sheet
+    section_id_map = {}
+
+    for ch_idx, meta in enumerate(chapter_meta):
+        for sec_idx, section_name in enumerate(meta['sections']):
+            global_section_id += 1
+            row = global_section_id + 1
+            ws_section.cell(row=row, column=1, value=global_section_id).border = thin_border
+            ws_section.cell(row=row, column=2, value=section_name).border = thin_border
+            ws_section.cell(row=row, column=3, value=ch_idx + 1).border = thin_border
+            section_id_map[(ch_idx, sec_idx)] = global_section_id
+
+    ws_section.column_dimensions['A'].width = 12
+    ws_section.column_dimensions['B'].width = 40
+    ws_section.column_dimensions['C'].width = 12
+
+    # --- Sheet 3: content ---
+    ws_content = wb.create_sheet('content')
+    write_header(ws_content, ['content_id', 'chapter_id', 'section_id', 'content', 'notes'])
+
+    content_id = 0
     for ch_idx, meta in enumerate(chapter_meta):
         pages_for_chapter = chapter_pages[ch_idx] if ch_idx < len(chapter_pages) else []
         page_cursor = 0
@@ -1213,11 +1234,9 @@ def generate_xlsx(toc_data, pages, output_path):
         for sec_idx, section_name in enumerate(meta['sections']):
             section_pages = []
             if len(meta['raw_sections']) == 0:
-                # No TOC sections: keep one synthesized section with all chapter content.
                 section_pages = pages_for_chapter[page_cursor:]
                 page_cursor = len(pages_for_chapter)
             else:
-                # One row per section; any overflow pages are appended to last section.
                 if page_cursor < len(pages_for_chapter):
                     section_pages.append(pages_for_chapter[page_cursor])
                     page_cursor += 1
@@ -1225,54 +1244,50 @@ def generate_xlsx(toc_data, pages, output_path):
                     section_pages.extend(pages_for_chapter[page_cursor:])
                     page_cursor = len(pages_for_chapter)
 
-            content = ''
-            notes = ''
+            content_text = ''
+            notes_text = ''
             if section_pages:
                 extracted_parts = [extract_tagged_from_html(page.get('html', '')) for page in section_pages]
-                content = '\n\n'.join(part['content'] for part in extracted_parts if part['content'])
-                notes = '\n'.join(part['notes'] for part in extracted_parts if part['notes'])
+                content_text = '\n\n'.join(part['content'] for part in extracted_parts if part['content'])
+                notes_text = '\n'.join(part['notes'] for part in extracted_parts if part['notes'])
 
-            add_styled_export_row({
-                'chapter_id': ch_idx + 1,
-                'chapter_name': meta['chapter_name'],
-                'section_id': sec_idx + 1,
-                'section_name': section_name,
-                'content': content,
-                'notes': notes,
-            })
-            row_count += 1
+            content_id += 1
+            sec_id = section_id_map.get((ch_idx, sec_idx), sec_idx + 1)
+            row = content_id + 1
+            ws_content.cell(row=row, column=1, value=content_id).border = thin_border
+            ws_content.cell(row=row, column=2, value=ch_idx + 1).border = thin_border
+            ws_content.cell(row=row, column=3, value=sec_id).border = thin_border
+            c_content = ws_content.cell(row=row, column=4, value=content_text)
+            c_content.border = thin_border
+            c_content.alignment = Alignment(wrap_text=True, vertical='top')
+            c_notes = ws_content.cell(row=row, column=5, value=notes_text)
+            c_notes.border = thin_border
+            c_notes.alignment = Alignment(wrap_text=True, vertical='top')
 
     # Fallback for direct/manual JSON with no usable TOC rows.
-    if row_count == 0:
+    if content_id == 0:
         for i, page in enumerate(safe_pages):
             extracted = extract_tagged_from_html(page.get('html', ''))
-            section_heading = str(page.get('sectionHeading', '') or '').strip()
-            label = str(page.get('label', '') or '').strip()
-            fallback_name = section_heading or f'Page {label or i + 1}'
+            content_id += 1
+            row = content_id + 1
+            ws_content.cell(row=row, column=1, value=content_id).border = thin_border
+            ws_content.cell(row=row, column=2, value='').border = thin_border
+            ws_content.cell(row=row, column=3, value=i + 1).border = thin_border
+            c_content = ws_content.cell(row=row, column=4, value=extracted['content'])
+            c_content.border = thin_border
+            c_content.alignment = Alignment(wrap_text=True, vertical='top')
+            c_notes = ws_content.cell(row=row, column=5, value=extracted['notes'])
+            c_notes.border = thin_border
+            c_notes.alignment = Alignment(wrap_text=True, vertical='top')
 
-            add_styled_export_row({
-                'chapter_id': '',
-                'chapter_name': '',
-                'section_id': i + 1,
-                'section_name': fallback_name,
-                'content': extracted['content'],
-                'notes': extracted['notes'],
-            })
-            row_count += 1
-
-    # Set column widths
-    ws.column_dimensions['A'].width = 12
-    ws.column_dimensions['B'].width = 35
-    ws.column_dimensions['C'].width = 12
-    ws.column_dimensions['D'].width = 40
-    ws.column_dimensions['E'].width = 60
-    ws.column_dimensions['F'].width = 40
-
-    # Freeze header row
-    ws.freeze_panes = 'A2'
+    ws_content.column_dimensions['A'].width = 12
+    ws_content.column_dimensions['B'].width = 12
+    ws_content.column_dimensions['C'].width = 12
+    ws_content.column_dimensions['D'].width = 60
+    ws_content.column_dimensions['E'].width = 40
 
     wb.save(output_path)
-    return row_count
+    return content_id
 
 
 def generate_books_index(output_dir):
